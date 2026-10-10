@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="128" fill="#151311"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" stroke="#d97706" stroke-width="12" stroke-opacity="0.3"/>
+  <defs>
+    <linearGradient id="coffeeGrad192" x1="120" y1="80" x2="390" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="50%" stop-color="#ea580c" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="innerGlow192" x1="256" y1="200" x2="256" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fef3c7" />
+      <stop offset="100%" stop-color="#ea580c" />
+    </linearGradient>
+  </defs>
+  <path d="M256 80C256 80 180 180 180 270C180 340 214 390 256 420C298 390 332 340 332 270C332 180 256 80 256 80Z" fill="url(#coffeeGrad192)"/>
+  <path d="M256 220C256 220 210 280 210 330C210 370 230 395 256 410C282 395 302 370 302 330C302 280 256 220 256 220Z" fill="url(#innerGlow192)"/>
+  <path d="M256 260Q265 310 250 360T256 400" stroke="#78350f" stroke-width="8" stroke-linecap="round"/>
+</svg>
+
