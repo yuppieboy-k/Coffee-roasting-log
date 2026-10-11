@@ -633,22 +633,31 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
 
       {/* Modal: Create / Edit Roast Log */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-roast-surface border border-roast-border rounded-2xl p-6 max-w-2xl w-full shadow-2xl space-y-5 my-8">
-            <div className="flex items-center justify-between pb-3 border-b border-roast-border">
-              <h3 className="text-lg font-bold text-roast-text flex items-center gap-2">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col sm:items-center sm:justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-roast-surface border border-roast-border sm:rounded-2xl rounded-none p-4 sm:p-6 max-w-2xl w-full shadow-2xl space-y-4 min-h-screen sm:min-h-0 sm:my-8 flex flex-col">
+            <div className="sticky top-0 z-10 bg-roast-surface/95 backdrop-blur-md pt-2 pb-3 border-b border-roast-border flex items-center justify-between">
+              <h3 className="text-base sm:text-lg font-bold text-roast-text flex items-center gap-2">
                 <Flame className="w-5 h-5 text-amber-500" />
                 {editingLogId ? 'Edit Roast Log' : 'Create New Roast Log'}
               </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="text-stone-400 hover:text-stone-200"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveRoast}
+                  className="sm:hidden px-3 py-1.5 rounded-lg bg-amber-600 text-stone-950 font-bold text-xs"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="text-stone-400 hover:text-stone-200 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-4 text-xs">
+            <div className="space-y-4 text-xs flex-1">
               {/* Row 1: Date, Roaster, Bean */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
@@ -698,10 +707,16 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                   <label className="block text-stone-300 font-semibold mb-1">Green Weight (g) *</label>
                   <input
                     type="number"
-                    value={formData.greenWeightGrams || 250}
-                    onChange={(e) =>
-                      setFormData({ ...formData, greenWeightGrams: Number(e.target.value) })
-                    }
+                    step="any"
+                    placeholder="250"
+                    value={formData.greenWeightGrams !== undefined && formData.greenWeightGrams !== null ? formData.greenWeightGrams : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({
+                        ...formData,
+                        greenWeightGrams: val === '' ? undefined : Number(val)
+                      });
+                    }}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text font-mono focus:border-amber-500 focus:outline-none"
                   />
                 </div>
@@ -710,11 +725,16 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                   <label className="block text-stone-300 font-semibold mb-1">Roasted Weight (g)</label>
                   <input
                     type="number"
+                    step="any"
                     placeholder="215"
-                    value={formData.roastedWeightGrams || ''}
-                    onChange={(e) =>
-                      setFormData({ ...formData, roastedWeightGrams: Number(e.target.value) })
-                    }
+                    value={formData.roastedWeightGrams !== undefined && formData.roastedWeightGrams !== null ? formData.roastedWeightGrams : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({
+                        ...formData,
+                        roastedWeightGrams: val === '' ? undefined : Number(val)
+                      });
+                    }}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text font-mono focus:border-amber-500 focus:outline-none"
                   />
                 </div>

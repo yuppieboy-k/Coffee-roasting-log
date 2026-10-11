@@ -15,7 +15,7 @@ import { ResearchPage } from './pages/ResearchPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { createSampleArtisanLog } from './services/artisanParser';
 import { googleDriveService } from './services/googleDriveService';
-import { generateRoastLogsCsv } from './services/csvExport';
+import { sheetSyncService } from './services/sheetSyncService';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('logs');
@@ -147,7 +147,34 @@ export const App: React.FC = () => {
     await saveRoastLogs(updated);
   };
 
-  // Quick Google Drive Sync: Saves all data into one single JSON file and updates Google Sheet
+  // Load latest data from Google Sheet if connected
+  const handleLoadFromGoogleSheet = async (sheetId?: string) => {
+    const targetId = sheetId || settings.googleDrive.sheetFileId;
+    if (!targetId || !googleDriveService.hasValidToken()) return;
+    setIsSyncing(true);
+    try {
+      const data = await sheetSyncService.loadAllFromGoogleSheet(targetId);
+      if (data.logs && data.logs.length > 0) {
+        setLogs(data.logs);
+        await saveRoastLogs(data.logs);
+      }
+      if (data.greenBeans && data.greenBeans.length > 0 || data.roasters && data.roasters.length > 0) {
+        const updatedSettings: AppSettings = {
+          ...settings,
+          greenBeans: data.greenBeans.length > 0 ? data.greenBeans : settings.greenBeans,
+          roasters: data.roasters.length > 0 ? data.roasters : settings.roasters,
+        };
+        setSettings(updatedSettings);
+        await saveSettings(updatedSettings);
+      }
+    } catch (err) {
+      console.warn('Failed to load data from Google Sheet:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Quick Google Drive Sync: Saves JSON backup and synchronizes Roasts, Beans, and Roasters to Google Sheet
   const triggerQuickSync = async () => {
     if (!settings.googleDrive.isConnected) return;
     setIsSyncing(true);
@@ -159,18 +186,13 @@ export const App: React.FC = () => {
         settings.googleDrive.appDataFileId
       );
 
-      // Also synchronize into Google Sheet if not disabled
+      // Synchronize all data into multi-tab Google Sheet (Roasts, Green Beans, Roasters)
       let sheetRes: { sheetId: string; webViewLink?: string } | undefined;
       if (settings.googleDrive.syncToGoogleSheet !== false) {
         try {
-          const csvStr = generateRoastLogsCsv(logs, settings);
-          sheetRes = await googleDriveService.syncLogsToGoogleSheet(
-            csvStr,
-            settings.googleDrive.appDataFolderId,
-            settings.googleDrive.sheetFileId
-          );
+          sheetRes = await sheetSyncService.syncAllToGoogleSheet(logs, settings);
         } catch (sheetErr) {
-          console.warn('Google Sheet sync error:', sheetErr);
+          console.warn('Google Sheet multi-tab sync error:', sheetErr);
         }
       }
 
@@ -178,7 +200,7 @@ export const App: React.FC = () => {
         ...settings,
         googleDrive: {
           ...settings.googleDrive,
-          appDataFileId: res.fileId, // CRITICAL: Persist fileId so all edits update the SAME single JSON file!
+          appDataFileId: res.fileId,
           sheetFileId: sheetRes?.sheetId || settings.googleDrive.sheetFileId,
           sheetWebViewLink: sheetRes?.webViewLink || settings.googleDrive.sheetWebViewLink,
           lastSyncTimestamp: new Date().toISOString(),
@@ -259,6 +281,11 @@ export const App: React.FC = () => {
               const loadedLogs = await loadRoastLogs();
               setLogs(loadedLogs);
             }}
+            onSyncAndLoadSheet={async () => {
+              await triggerQuickSync();
+              await handleLoadFromGoogleSheet();
+            }}
+            isSyncingSheet={isSyncing}
           />
         )}
       </main>

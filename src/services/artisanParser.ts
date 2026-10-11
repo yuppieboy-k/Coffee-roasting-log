@@ -360,22 +360,83 @@ export function parseArtisanFile(fileContent: string, fileName: string): ParsedA
     temp2 = [...temp1];
   }
 
-  // Artisan event markers can be indices or seconds
+  // Helper to extract event time from various Artisan dictionary representations
+  const getEventTime = (...keys: string[]): number | undefined => {
+    for (const key of keys) {
+      const val = dict[key];
+      if (val !== undefined && val !== null && val !== -1 && val !== '') {
+        const num = Number(val);
+        if (!isNaN(num)) {
+          // If val is an index in timex array and is integer
+          if (Number.isInteger(num) && num >= 0 && num < timex.length && timex.length > 0) {
+            // Check if timex[num] is plausible or if num itself was seconds
+            // If the last timex is > num, but num is also an exact index:
+            // Artisan usually stores event times as integer index of the reading
+            return timex[num];
+          }
+          return num;
+        }
+      }
+    }
+    return undefined;
+  };
+
   const eventsMap: any = {};
-  if (dict.charge !== undefined && dict.charge !== -1) {
-    eventsMap.charge = typeof dict.charge === 'number' && dict.charge < timex.length ? timex[dict.charge] : Number(dict.charge);
+  
+  // Charge
+  eventsMap.charge = getEventTime('charge', 'CHARGE', 'chargetime', 'charge_time');
+  
+  // Dry End
+  eventsMap.dry = getEventTime('dry', 'DRY', 'dryend', 'dry_end', 'drytime', 'dry_time');
+  
+  // First Crack Start (supports fc, fcs, firstcrack, first_crack, fc_time, etc.)
+  eventsMap.fc = getEventTime(
+    'fc', 'FC', 'fcs', 'FCS', 'firstcrack', 'first_crack', 'firstcrackstart',
+    'fc_time', 'fcs_time', 'fcstart'
+  );
+
+  // First Crack End
+  eventsMap.fce = getEventTime('fce', 'FCE', 'firstcrackend', 'first_crack_end', 'fce_time');
+
+  // Second Crack Start
+  eventsMap.sc = getEventTime('sc', 'SC', 'scs', 'SCS', 'secondcrack', 'second_crack', 'sc_time');
+
+  // Drop
+  eventsMap.drop = getEventTime('drop', 'DROP', 'droptime', 'drop_time', 'cool', 'dump');
+
+  // Also check Artisan specialevents list if present: dict.specialevents = [[time, type, ...]]
+  if (Array.isArray(dict.specialevents)) {
+    for (const ev of dict.specialevents) {
+      if (Array.isArray(ev) && ev.length >= 2) {
+        const evTime = Number(ev[0]);
+        const evType = String(ev[1]).toLowerCase();
+        if (!isNaN(evTime)) {
+          if ((evType.includes('first') || evType.includes('fc')) && eventsMap.fc === undefined) {
+            eventsMap.fc = evTime;
+          } else if (evType.includes('dry') && eventsMap.dry === undefined) {
+            eventsMap.dry = evTime;
+          } else if (evType.includes('drop') && eventsMap.drop === undefined) {
+            eventsMap.drop = evTime;
+          } else if (evType.includes('charge') && eventsMap.charge === undefined) {
+            eventsMap.charge = evTime;
+          }
+        }
+      }
+    }
   }
-  if (dict.dry !== undefined && dict.dry !== -1) {
-    eventsMap.dry = typeof dict.dry === 'number' && dict.dry < timex.length ? timex[dict.dry] : Number(dict.dry);
-  }
-  if (dict.fc !== undefined && dict.fc !== -1) {
-    eventsMap.fc = typeof dict.fc === 'number' && dict.fc < timex.length ? timex[dict.fc] : Number(dict.fc);
-  }
-  if (dict.fcs !== undefined && dict.fcs !== -1) {
-    eventsMap.fc = typeof dict.fcs === 'number' && dict.fcs < timex.length ? timex[dict.fcs] : Number(dict.fcs);
-  }
-  if (dict.drop !== undefined && dict.drop !== -1) {
-    eventsMap.drop = typeof dict.drop === 'number' && dict.drop < timex.length ? timex[dict.drop] : Number(dict.drop);
+
+  // Adjust relative times if events are given relative to Charge
+  if (eventsMap.charge !== undefined && eventsMap.charge > 0) {
+    if (eventsMap.fc !== undefined && eventsMap.fc > 0 && eventsMap.fc < eventsMap.charge) {
+      // fc was given in seconds since charge!
+      eventsMap.fc = eventsMap.charge + eventsMap.fc;
+    }
+    if (eventsMap.dry !== undefined && eventsMap.dry > 0 && eventsMap.dry < eventsMap.charge) {
+      eventsMap.dry = eventsMap.charge + eventsMap.dry;
+    }
+    if (eventsMap.drop !== undefined && eventsMap.drop > 0 && eventsMap.drop < eventsMap.charge) {
+      eventsMap.drop = eventsMap.charge + eventsMap.drop;
+    }
   }
 
   return processRawRoastPoints(timex, temp2, temp1, eventsMap, fileName, fileContent);

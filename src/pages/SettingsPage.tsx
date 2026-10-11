@@ -17,7 +17,8 @@ import {
   Info,
   Folder,
   Sliders,
-  ExternalLink
+  ExternalLink,
+  RefreshCw
 } from 'lucide-react';
 import { googleDriveService } from '../services/googleDriveService';
 import { exportAllData, importAllData } from '../services/storage';
@@ -26,12 +27,16 @@ interface SettingsPageProps {
   settings: AppSettings;
   onUpdateSettings: (newSettings: AppSettings) => void;
   onRefreshData?: () => void;
+  onSyncAndLoadSheet?: () => Promise<void>;
+  isSyncingSheet?: boolean;
 }
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({
   settings,
   onUpdateSettings,
   onRefreshData,
+  onSyncAndLoadSheet,
+  isSyncingSheet = false,
 }) => {
   const [activeSection, setActiveSection] = useState<'roasters' | 'beans' | 'drive' | 'general'>('roasters');
 
@@ -778,24 +783,37 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   />
                   <div>
                     <label htmlFor="syncGoogleSheet" className="text-xs font-semibold text-stone-200 cursor-pointer">
-                      Also sync all roast logs into a Google Sheet (<code>RoastCraft_Roast_Logs</code>)
+                      Sync Roasts, Green Beans, and Roasters to Google Sheet (<code>RoastCraft_Roast_Logs</code>)
                     </label>
                     <p className="text-[11px] text-stone-400 mt-0.5">
-                      Automatically maintains an organized spreadsheet of all roast dates, weights, loss %, ratings, DTR%, and tasting notes directly on your Google Drive.
+                      Maintains dedicated tabs (<strong>Roasts</strong>, <strong>Green Beans</strong>, <strong>Roasters</strong>) directly on your Google Drive as your single source of truth.
                     </p>
                   </div>
                 </div>
 
-                {settings.googleDrive.sheetWebViewLink && (
-                  <a
-                    href={settings.googleDrive.sheetWebViewLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 text-xs transition font-medium whitespace-nowrap"
-                  >
-                    Open Sheet <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
+                <div className="flex items-center gap-2">
+                  {onSyncAndLoadSheet && (
+                    <button
+                      type="button"
+                      onClick={onSyncAndLoadSheet}
+                      disabled={isSyncingSheet || !settings.googleDrive.isConnected}
+                      className="px-2.5 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs transition font-medium whitespace-nowrap disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingSheet ? 'animate-spin text-amber-500' : ''}`} />
+                      {isSyncingSheet ? 'Syncing...' : 'Sync & Load from Sheet'}
+                    </button>
+                  )}
+                  {settings.googleDrive.sheetWebViewLink && (
+                    <a
+                      href={settings.googleDrive.sheetWebViewLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 text-xs transition font-medium whitespace-nowrap"
+                    >
+                      Open Sheet <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -899,6 +917,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
               </label>
             </div>
+
+            <div className="pt-3 border-t border-stone-800 text-[11px] text-stone-500 flex items-center justify-between">
+              <span>RoastCraft PWA Edition</span>
+              <span className="font-mono bg-stone-900 px-2 py-0.5 rounded border border-stone-800 text-stone-400">
+                Version 1.1.0
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -955,8 +980,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   <label className="block text-stone-300 font-semibold mb-1">Capacity (Grams)</label>
                   <input
                     type="number"
-                    value={roasterForm.capacityGrams || 500}
-                    onChange={(e) => setRoasterForm({ ...roasterForm, capacityGrams: Number(e.target.value) })}
+                    step="any"
+                    placeholder="500"
+                    value={roasterForm.capacityGrams !== undefined && roasterForm.capacityGrams !== null ? roasterForm.capacityGrams : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRoasterForm({ ...roasterForm, capacityGrams: val === '' ? (undefined as any) : Number(val) });
+                    }}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   />
                 </div>
@@ -1071,9 +1101,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   <label className="block text-stone-300 font-semibold mb-1">Altitude (MASL)</label>
                   <input
                     type="number"
+                    step="any"
                     placeholder="2000"
-                    value={beanForm.altitude || ''}
-                    onChange={(e) => setBeanForm({ ...beanForm, altitude: Number(e.target.value) })}
+                    value={beanForm.altitude !== undefined && beanForm.altitude !== null ? beanForm.altitude : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setBeanForm({ ...beanForm, altitude: val === '' ? undefined : Number(val) });
+                    }}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   />
                 </div>
@@ -1082,9 +1116,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   <label className="block text-stone-300 font-semibold mb-1">Density (g/L)</label>
                   <input
                     type="number"
+                    step="any"
                     placeholder="710"
-                    value={beanForm.densityGramsPerLiter || ''}
-                    onChange={(e) => setBeanForm({ ...beanForm, densityGramsPerLiter: Number(e.target.value) })}
+                    value={beanForm.densityGramsPerLiter !== undefined && beanForm.densityGramsPerLiter !== null ? beanForm.densityGramsPerLiter : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setBeanForm({ ...beanForm, densityGramsPerLiter: val === '' ? undefined : Number(val) });
+                    }}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   />
                 </div>
@@ -1093,8 +1131,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   <label className="block text-stone-300 font-semibold mb-1">Stock (g)</label>
                   <input
                     type="number"
-                    value={beanForm.stockRemainingGrams || 1000}
-                    onChange={(e) => setBeanForm({ ...beanForm, stockRemainingGrams: Number(e.target.value) })}
+                    step="any"
+                    placeholder="1000"
+                    value={beanForm.stockRemainingGrams !== undefined && beanForm.stockRemainingGrams !== null ? beanForm.stockRemainingGrams : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setBeanForm({ ...beanForm, stockRemainingGrams: val === '' ? 0 : Number(val) });
+                    }}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   />
                 </div>

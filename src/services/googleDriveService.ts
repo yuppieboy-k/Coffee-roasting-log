@@ -18,6 +18,7 @@ export interface DriveItem {
 const DRIVE_SCOPES = [
   'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/spreadsheets',
 ].join(' ');
 
 const TOKEN_KEY = 'roastcraft_gdrive_token_v1';
