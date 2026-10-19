@@ -13,7 +13,7 @@ import { RoastLogPage } from './pages/RoastLogPage';
 import { AnalysisPage } from './pages/AnalysisPage';
 import { ResearchPage } from './pages/ResearchPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { createSampleArtisanLog } from './services/artisanParser';
+import { createSampleArtisanLog, parseArtisanFile } from './services/artisanParser';
 import { googleDriveService } from './services/googleDriveService';
 import { sheetSyncService } from './services/sheetSyncService';
 
@@ -40,6 +40,33 @@ export const App: React.FC = () => {
         }
 
         let loadedLogs = await loadRoastLogs();
+
+        // Re-parse any existing logs that have rawSource so updated Artisan parser logic
+        // (timeindex, computed FCs_time, DTR%, Charge normalization) applies to previously saved logs
+        if (loadedLogs && loadedLogs.length > 0) {
+          let didUpgrade = false;
+          loadedLogs = loadedLogs.map(log => {
+            if (log.artisanLogParsed?.rawSource) {
+              try {
+                const reparsed = parseArtisanFile(
+                  log.artisanLogParsed.rawSource,
+                  log.artisanLogDriveFileName || log.artisanLogParsed.fileName
+                );
+                didUpgrade = true;
+                return {
+                  ...log,
+                  artisanLogParsed: reparsed,
+                };
+              } catch (e) {
+                console.warn('Could not re-parse cached rawSource for log:', log.id, e);
+              }
+            }
+            return log;
+          });
+          if (didUpgrade) {
+            await saveRoastLogs(loadedLogs);
+          }
+        }
 
         // If first launch and no logs exist, seed with 3 realistic roast profiles
         if (!loadedLogs || loadedLogs.length === 0) {
@@ -115,13 +142,17 @@ export const App: React.FC = () => {
     init();
   }, []);
 
-  // Persist settings changes
+  // Persist settings changes and sync beans/roasters to Google Sheets if connected
   const handleUpdateSettings = async (newSettings: AppSettings) => {
     setSettings(newSettings);
     await saveSettings(newSettings);
+
+    if ((newSettings.googleDrive.isConnected || googleDriveService.hasValidToken()) && newSettings.googleDrive.autoSync !== false) {
+      triggerQuickSync(logs, newSettings);
+    }
   };
 
-  // Persist new or updated log
+  // Persist new or updated log and sync immediately with fresh logs array
   const handleSaveLog = async (logToSave: RoastLog) => {
     const existingIndex = logs.findIndex(l => l.id === logToSave.id);
     let updated: RoastLog[];
@@ -134,17 +165,21 @@ export const App: React.FC = () => {
     setLogs(updated);
     await saveRoastLogs(updated);
 
-    // If autoSync with Drive is enabled, trigger background sync
-    if (settings.googleDrive.isConnected && settings.googleDrive.autoSync) {
-      triggerQuickSync();
+    // Trigger sync with fresh `updated` logs array (avoiding stale closure state)
+    if ((settings.googleDrive.isConnected || googleDriveService.hasValidToken()) && settings.googleDrive.autoSync !== false) {
+      triggerQuickSync(updated, settings);
     }
   };
 
-  // Delete log
+  // Delete log and sync immediately with fresh logs array
   const handleDeleteLog = async (logId: string) => {
     const updated = logs.filter(l => l.id !== logId);
     setLogs(updated);
     await saveRoastLogs(updated);
+
+    if ((settings.googleDrive.isConnected || googleDriveService.hasValidToken()) && settings.googleDrive.autoSync !== false) {
+      triggerQuickSync(updated, settings);
+    }
   };
 
   // Load latest data from Google Sheet if connected
@@ -155,10 +190,24 @@ export const App: React.FC = () => {
     try {
       const data = await sheetSyncService.loadAllFromGoogleSheet(targetId);
       if (data.logs && data.logs.length > 0) {
-        setLogs(data.logs);
-        await saveRoastLogs(data.logs);
+        // Merge with any local full curve dataPoints if matching log exists locally
+        const mergedLogs = data.logs.map(sheetLog => {
+          const localMatch = logs.find(
+            l => l.id === sheetLog.id ||
+              (sheetLog.artisanLogDriveFileId && l.artisanLogDriveFileId === sheetLog.artisanLogDriveFileId)
+          );
+          if (localMatch?.artisanLogParsed && localMatch.artisanLogParsed.dataPoints.length > 0) {
+            return {
+              ...sheetLog,
+              artisanLogParsed: localMatch.artisanLogParsed,
+            };
+          }
+          return sheetLog;
+        });
+        setLogs(mergedLogs);
+        await saveRoastLogs(mergedLogs);
       }
-      if (data.greenBeans && data.greenBeans.length > 0 || data.roasters && data.roasters.length > 0) {
+      if ((data.greenBeans && data.greenBeans.length > 0) || (data.roasters && data.roasters.length > 0)) {
         const updatedSettings: AppSettings = {
           ...settings,
           greenBeans: data.greenBeans.length > 0 ? data.greenBeans : settings.greenBeans,
@@ -175,34 +224,38 @@ export const App: React.FC = () => {
   };
 
   // Quick Google Drive Sync: Saves JSON backup and synchronizes Roasts, Beans, and Roasters to Google Sheet
-  const triggerQuickSync = async () => {
-    if (!settings.googleDrive.isConnected) return;
+  const triggerQuickSync = async (overrideLogs?: RoastLog[], overrideSettings?: AppSettings) => {
+    const activeLogs = overrideLogs || logs;
+    const activeSettings = overrideSettings || settings;
+
+    if (!activeSettings.googleDrive.isConnected && !googleDriveService.hasValidToken()) return;
     setIsSyncing(true);
     try {
       const jsonStr = await exportAllData();
       const res = await googleDriveService.syncAppDataToDrive(
         jsonStr,
-        settings.googleDrive.appDataFolderId,
-        settings.googleDrive.appDataFileId
+        activeSettings.googleDrive.appDataFolderId,
+        activeSettings.googleDrive.appDataFileId
       );
 
       // Synchronize all data into multi-tab Google Sheet (Roasts, Green Beans, Roasters)
       let sheetRes: { sheetId: string; webViewLink?: string } | undefined;
-      if (settings.googleDrive.syncToGoogleSheet !== false) {
+      if (activeSettings.googleDrive.syncToGoogleSheet !== false) {
         try {
-          sheetRes = await sheetSyncService.syncAllToGoogleSheet(logs, settings);
+          sheetRes = await sheetSyncService.syncAllToGoogleSheet(activeLogs, activeSettings);
         } catch (sheetErr) {
           console.warn('Google Sheet multi-tab sync error:', sheetErr);
         }
       }
 
-      const updated = {
-        ...settings,
+      const updated: AppSettings = {
+        ...activeSettings,
         googleDrive: {
-          ...settings.googleDrive,
+          ...activeSettings.googleDrive,
+          isConnected: true,
           appDataFileId: res.fileId,
-          sheetFileId: sheetRes?.sheetId || settings.googleDrive.sheetFileId,
-          sheetWebViewLink: sheetRes?.webViewLink || settings.googleDrive.sheetWebViewLink,
+          sheetFileId: sheetRes?.sheetId || activeSettings.googleDrive.sheetFileId,
+          sheetWebViewLink: sheetRes?.webViewLink || activeSettings.googleDrive.sheetWebViewLink,
           lastSyncTimestamp: new Date().toISOString(),
         }
       };

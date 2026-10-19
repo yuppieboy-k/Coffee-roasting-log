@@ -1,4 +1,4 @@
-const CACHE_NAME = 'roastcraft-cache-v1';
+const CACHE_NAME = 'roastcraft-cache-v1.2.0';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -32,28 +32,30 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network-first strategy so new deployments (like v1.2.0) load immediately when online,
+  // falling back to cache only when offline.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return (
-        cached ||
-        fetch(event.request).then((response) => {
-          if (
-            response &&
-            response.status === 200 &&
-            response.type === 'basic' &&
-            event.request.method === 'GET'
-          ) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
-        }).catch(() => {
+    fetch(event.request)
+      .then((response) => {
+        if (
+          response &&
+          response.status === 200 &&
+          response.type === 'basic' &&
+          event.request.method === 'GET'
+        ) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return response;
+      })
+      .catch(() => {
+        return caches.match(event.request).then((cached) => {
+          if (cached) return cached;
           if (event.request.mode === 'navigate') {
             return caches.match('./index.html');
           }
-        })
-      );
-    })
+        });
+      })
   );
 });
 

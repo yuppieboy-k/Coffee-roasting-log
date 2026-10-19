@@ -88,7 +88,12 @@ export class SheetSyncService {
       'Tasting Notes',
       'Flavor Descriptors',
       'Artisan Log File ID',
-      'Artisan Log File Name'
+      'Artisan Log File Name',
+      'Charge Temp',
+      'Turning Point Sec',
+      'Turning Point Temp',
+      'Dry End Sec',
+      'Dry End Temp'
     ];
 
     const rows = logs.map(l => {
@@ -113,7 +118,12 @@ export class SheetSyncService {
         escapeCsvField(l.tastingNotes),
         escapeCsvField((l.flavorDescriptors || []).join(', ')),
         escapeCsvField(l.artisanLogDriveFileId || ''),
-        escapeCsvField(l.artisanLogDriveFileName || '')
+        escapeCsvField(l.artisanLogDriveFileName || ''),
+        escapeCsvField(m?.chargeTemp ?? ''),
+        escapeCsvField(m?.turningPointTimeSec ?? ''),
+        escapeCsvField(m?.turningPointTemp ?? ''),
+        escapeCsvField(m?.dryEndTimeSec ?? ''),
+        escapeCsvField(m?.dryEndTemp ?? '')
       ].join(',');
     });
 
@@ -424,10 +434,26 @@ export class SheetSyncService {
     const roastedWtIdx = headers.findIndex(h => h.includes('roasted weight'));
     const ratingIdx = headers.findIndex(h => h.includes('rating'));
     const degreeIdx = headers.findIndex(h => h.includes('degree'));
+    const totalSecIdx = headers.findIndex(h => h.includes('total roast sec'));
+    const dtrIdx = headers.findIndex(h => h.includes('dtr'));
+    const fcSecIdx = headers.findIndex(h => h.includes('first crack sec'));
+    const fcTempIdx = headers.findIndex(h => h.includes('first crack temp'));
+    const dropTempIdx = headers.findIndex(h => h.includes('drop temp'));
+    const chargeTempIdx = headers.findIndex(h => h.includes('charge temp'));
+    const tpSecIdx = headers.findIndex(h => h.includes('turning point sec'));
+    const tpTempIdx = headers.findIndex(h => h.includes('turning point temp'));
+    const drySecIdx = headers.findIndex(h => h.includes('dry end sec'));
+    const dryTempIdx = headers.findIndex(h => h.includes('dry end temp'));
     const notesIdx = headers.findIndex(h => h.includes('tasting notes') || h.includes('notes'));
     const descIdx = headers.findIndex(h => h.includes('descriptors') || h.includes('flavor'));
     const fileIdIdx = headers.findIndex(h => h.includes('file id'));
     const fileNameIdx = headers.findIndex(h => h.includes('file name') || h.includes('file'));
+
+    const parseOptNum = (val: string | undefined): number | undefined => {
+      if (val === undefined || val === null || val.trim() === '') return undefined;
+      const n = Number(val.trim());
+      return isNaN(n) ? undefined : n;
+    };
 
     const logs: RoastLog[] = [];
 
@@ -452,6 +478,69 @@ export class SheetSyncService {
         ? r[descIdx].split(',').map(s => s.trim()).filter(Boolean)
         : [];
 
+      const fileId = fileIdIdx !== -1 && r[fileIdIdx]?.trim() ? r[fileIdIdx].trim() : undefined;
+      const fileName = fileNameIdx !== -1 && r[fileNameIdx]?.trim() ? r[fileNameIdx].trim() : undefined;
+
+      const totalTimeSec = parseOptNum(totalSecIdx !== -1 ? r[totalSecIdx] : undefined);
+      const dtrPercent = parseOptNum(dtrIdx !== -1 ? r[dtrIdx] : undefined);
+      const firstCrackTimeSec = parseOptNum(fcSecIdx !== -1 ? r[fcSecIdx] : undefined);
+      const firstCrackTemp = parseOptNum(fcTempIdx !== -1 ? r[fcTempIdx] : undefined);
+      const dropTemp = parseOptNum(dropTempIdx !== -1 ? r[dropTempIdx] : undefined);
+      const chargeTemp = parseOptNum(chargeTempIdx !== -1 ? r[chargeTempIdx] : undefined);
+      const turningPointTimeSec = parseOptNum(tpSecIdx !== -1 ? r[tpSecIdx] : undefined);
+      const turningPointTemp = parseOptNum(tpTempIdx !== -1 ? r[tpTempIdx] : undefined);
+      const dryEndTimeSec = parseOptNum(drySecIdx !== -1 ? r[drySecIdx] : undefined);
+      const dryEndTemp = parseOptNum(dryTempIdx !== -1 ? r[dryTempIdx] : undefined);
+
+      let artisanLogParsed: RoastLog['artisanLogParsed'] = undefined;
+      if (totalTimeSec !== undefined || firstCrackTimeSec !== undefined || dtrPercent !== undefined) {
+        const tot = totalTimeSec || 500;
+        const drySec = dryEndTimeSec ?? Math.round(tot * 0.5);
+        const fcSec = firstCrackTimeSec ?? (dtrPercent ? Number((tot * (1 - dtrPercent / 100)).toFixed(1)) : undefined);
+        const devSec = fcSec !== undefined ? Number(Math.max(0, tot - fcSec).toFixed(1)) : 0;
+        const devPct = dtrPercent ?? (fcSec !== undefined ? Number(((devSec / tot) * 100).toFixed(1)) : 0);
+        const dryPct = Number(((drySec / tot) * 100).toFixed(1));
+        const mailSec = fcSec !== undefined ? Number(Math.max(0, fcSec - drySec).toFixed(1)) : 0;
+        const mailPct = Number(((mailSec / tot) * 100).toFixed(1));
+
+        artisanLogParsed = {
+          fileName: fileName || 'Sheet_Synced_Profile.alog',
+          durationSec: tot,
+          dataPoints: [],
+          events: {
+            charge: chargeTemp !== undefined ? { timeSec: 0, temp: chargeTemp, type: 'CHARGE', label: 'Charge' } : undefined,
+            turningPoint: turningPointTimeSec !== undefined && turningPointTemp !== undefined
+              ? { timeSec: turningPointTimeSec, temp: turningPointTemp, type: 'TP', label: 'Turning Point' }
+              : undefined,
+            dryEnd: dryEndTimeSec !== undefined && dryEndTemp !== undefined
+              ? { timeSec: dryEndTimeSec, temp: dryEndTemp, type: 'DRY_END', label: 'Dry End' }
+              : undefined,
+            firstCrackStart: fcSec !== undefined
+              ? { timeSec: fcSec, temp: firstCrackTemp ?? 0, type: 'FC_START', label: 'First Crack' }
+              : undefined,
+            drop: { timeSec: tot, temp: dropTemp ?? 0, type: 'DROP', label: 'Drop' },
+          },
+          metrics: {
+            chargeTemp,
+            turningPointTimeSec,
+            turningPointTemp,
+            dryEndTimeSec,
+            dryEndTemp,
+            firstCrackTimeSec: fcSec,
+            firstCrackTemp,
+            dropTimeSec: tot,
+            dropTemp: dropTemp ?? 0,
+            totalTimeSec: tot,
+            dryingTimeSec: drySec,
+            dryingPercent: dryPct,
+            maillardTimeSec: mailSec,
+            maillardPercent: mailPct,
+            developmentTimeSec: devSec,
+            developmentPercent: devPct,
+          },
+        };
+      }
+
       logs.push({
         id,
         date,
@@ -464,8 +553,9 @@ export class SheetSyncService {
         roastDegree,
         tastingNotes,
         flavorDescriptors,
-        artisanLogDriveFileId: fileIdIdx !== -1 ? r[fileIdIdx] : undefined,
-        artisanLogDriveFileName: fileNameIdx !== -1 ? r[fileNameIdx] : undefined,
+        artisanLogDriveFileId: fileId,
+        artisanLogDriveFileName: fileName,
+        artisanLogParsed,
         createdAt: date,
         updatedAt: date
       });

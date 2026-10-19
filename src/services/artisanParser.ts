@@ -125,34 +125,77 @@ function parseArtisanCsv(csvText: string, fileName: string): ParsedArtisanLog {
 }
 
 /**
- * Normalizes raw time and temperature arrays into a full ParsedArtisanLog
+ * Normalizes raw time and temperature arrays into a full ParsedArtisanLog.
+ * Aligns with Artisan Scope conventions:
+ * - Time 0:00 is anchored at CHARGE (if charge is defined).
+ * - Data points are trimmed to the roast window [CHARGE .. DROP + cooling buffer] so long preheats don't squash the curve.
  */
 function processRawRoastPoints(
-  timeArr: number[],
-  btArr: number[],
-  etArr: number[],
+  rawTimeArr: number[],
+  rawBtArr: number[],
+  rawEtArr: number[],
   eventsMap: {
     charge?: number;
+    tp?: number;
     dry?: number;
     fc?: number;
     fce?: number;
     sc?: number;
     drop?: number;
+    chargeTemp?: number;
+    tpTemp?: number;
+    dryTemp?: number;
+    fcTemp?: number;
+    dropTemp?: number;
   },
   fileName: string,
-  rawSource?: string
+  rawSource?: string,
+  roastDate?: string
 ): ParsedArtisanLog {
-  const pointsCount = Math.min(timeArr.length, btArr.length);
-  if (pointsCount === 0) {
+  const rawPointsCount = Math.min(rawTimeArr.length, rawBtArr.length);
+  if (rawPointsCount === 0) {
     throw new Error('No valid temperature readings found in Artisan log');
   }
+
+  // Raw charge and drop in original timex coordinates
+  const rawChargeTime = eventsMap.charge !== undefined ? eventsMap.charge : rawTimeArr[0];
+  const rawDropTime = eventsMap.drop !== undefined ? eventsMap.drop : rawTimeArr[rawPointsCount - 1];
+
+  // Determine slice bounds so long preheat or post-drop logs are cleanly focused on the roast
+  let startIdx = 0;
+  if (eventsMap.charge !== undefined) {
+    const cIdx = rawTimeArr.findIndex(t => t >= rawChargeTime - 0.001);
+    if (cIdx > 0) startIdx = cIdx;
+  }
+
+  let endIdx = rawPointsCount - 1;
+  if (eventsMap.drop !== undefined) {
+    // Include up to 15 seconds after DROP for visual context, or stop at DROP if preferred
+    const dIdx = rawTimeArr.findIndex(t => t >= rawDropTime - 0.001);
+    if (dIdx > startIdx) {
+      endIdx = Math.min(rawPointsCount - 1, dIdx);
+    }
+  }
+
+  // Build Charge-relative arrays (where CHARGE = 0.0s, matching Artisan's X-axis and computed times)
+  const timeArr: number[] = [];
+  const btArr: number[] = [];
+  const etArr: number[] = [];
+
+  for (let i = startIdx; i <= endIdx; i++) {
+    timeArr.push(Math.max(0, rawTimeArr[i] - rawChargeTime));
+    btArr.push(rawBtArr[i]);
+    etArr.push(rawEtArr[i] !== undefined ? rawEtArr[i] : rawBtArr[i]);
+  }
+
+  const pointsCount = timeArr.length;
 
   // Pre-calculate Rate of Rise (RoR)
   const btData = [];
   const etData = [];
   for (let i = 0; i < pointsCount; i++) {
     btData.push({ time: timeArr[i], temp: btArr[i] });
-    etData.push({ time: timeArr[i], temp: etArr[i] || btArr[i] });
+    etData.push({ time: timeArr[i], temp: etArr[i] });
   }
 
   const rorBT = calculateRoR(btData, 30);
@@ -169,72 +212,90 @@ function processRawRoastPoints(
     });
   }
 
-  // Extract or detect events
-  // 1. Charge
-  const chargeTimeSec = eventsMap.charge !== undefined ? eventsMap.charge : timeArr[0];
-  const chargeIdx = dataPoints.findIndex(p => p.timeSec >= chargeTimeSec);
-  const chargeTemp = chargeIdx >= 0 ? dataPoints[chargeIdx].beanTemp : dataPoints[0].beanTemp;
+  // Helper to convert raw timex coordinate to Charge-relative timeSec
+  const toRelSec = (rawSec: number | undefined): number | undefined => {
+    if (rawSec === undefined || isNaN(rawSec)) return undefined;
+    return Number(Math.max(0, rawSec - rawChargeTime).toFixed(1));
+  };
 
-  // 2. Turning Point (minimum BT in first 3 minutes after charge)
-  let turningPointTemp = chargeTemp;
-  let turningPointTimeSec = chargeTimeSec;
-  const searchLimitTime = Math.min(chargeTimeSec + 180, timeArr[timeArr.length - 1]);
-  for (let i = Math.max(0, chargeIdx); i < dataPoints.length; i++) {
-    if (dataPoints[i].timeSec > searchLimitTime) break;
-    if (dataPoints[i].beanTemp < turningPointTemp) {
-      turningPointTemp = dataPoints[i].beanTemp;
-      turningPointTimeSec = dataPoints[i].timeSec;
+  // 1. Charge (at 0.0s relative)
+  const chargeTimeSec = 0;
+  const chargeTemp = eventsMap.chargeTemp !== undefined
+    ? Number(eventsMap.chargeTemp.toFixed(1))
+    : dataPoints[0].beanTemp;
+
+  // 2. Drop event
+  const lastPoint = dataPoints[dataPoints.length - 1];
+  const dropTimeSec = toRelSec(rawDropTime) ?? lastPoint.timeSec;
+  const dropPt = dataPoints.find(p => p.timeSec >= dropTimeSec - 0.2) || lastPoint;
+  const dropTemp = eventsMap.dropTemp !== undefined
+    ? Number(eventsMap.dropTemp.toFixed(1))
+    : dropPt.beanTemp;
+
+  // 3. Turning Point (minimum BT in first 180s after charge)
+  let turningPointTimeSec = toRelSec(eventsMap.tp);
+  let turningPointTemp = eventsMap.tpTemp !== undefined ? Number(eventsMap.tpTemp.toFixed(1)) : undefined;
+
+  if (turningPointTimeSec === undefined || turningPointTemp === undefined) {
+    let minBt = chargeTemp;
+    let minTime = 0;
+    const searchLimitTime = Math.min(180, dropTimeSec);
+    for (let i = 0; i < dataPoints.length; i++) {
+      if (dataPoints[i].timeSec > searchLimitTime) break;
+      if (dataPoints[i].beanTemp < minBt) {
+        minBt = dataPoints[i].beanTemp;
+        minTime = dataPoints[i].timeSec;
+      }
     }
+    if (turningPointTimeSec === undefined) turningPointTimeSec = minTime;
+    if (turningPointTemp === undefined) turningPointTemp = minBt;
   }
 
-  // 3. Drop event
-  const lastPoint = dataPoints[dataPoints.length - 1];
-  const dropTimeSec = eventsMap.drop !== undefined ? eventsMap.drop : lastPoint.timeSec;
-  const dropIdx = dataPoints.findIndex(p => p.timeSec >= dropTimeSec);
-  const dropTemp = dropIdx >= 0 ? dataPoints[dropIdx].beanTemp : lastPoint.beanTemp;
-
-  // 4. Dry End (~150°C / 300°F if not specified)
-  let dryEndTimeSec = eventsMap.dry;
-  let dryEndTemp: number | undefined;
+  // 4. Dry End
+  let dryEndTimeSec = toRelSec(eventsMap.dry);
+  let dryEndTemp = eventsMap.dryTemp !== undefined ? Number(eventsMap.dryTemp.toFixed(1)) : undefined;
   if (dryEndTimeSec === undefined) {
-    const autoDry = dataPoints.find(p => p.timeSec > turningPointTimeSec && p.beanTemp >= 150);
+    const autoDry = dataPoints.find(p => p.timeSec > turningPointTimeSec! && p.beanTemp >= 150);
     if (autoDry) {
       dryEndTimeSec = autoDry.timeSec;
       dryEndTemp = autoDry.beanTemp;
     }
-  } else {
-    const pt = dataPoints.find(p => p.timeSec >= (dryEndTimeSec as number));
+  } else if (dryEndTemp === undefined) {
+    const pt = dataPoints.find(p => p.timeSec >= dryEndTimeSec! - 0.2);
     dryEndTemp = pt?.beanTemp;
   }
 
-  // 5. First Crack Start (~195°C / 385°F if not specified)
-  let firstCrackTimeSec = eventsMap.fc;
-  let firstCrackTemp: number | undefined;
+  // 5. First Crack Start
+  let firstCrackTimeSec = toRelSec(eventsMap.fc);
+  let firstCrackTemp = eventsMap.fcTemp !== undefined ? Number(eventsMap.fcTemp.toFixed(1)) : undefined;
   if (firstCrackTimeSec === undefined) {
-    const autoFc = dataPoints.find(p => p.timeSec > (dryEndTimeSec || turningPointTimeSec) && p.beanTemp >= 196);
+    // Only auto-detect if no explicit event marker was found in the file
+    const autoFc = dataPoints.find(
+      p => p.timeSec > (dryEndTimeSec || turningPointTimeSec || 60) && p.beanTemp >= 195
+    );
     if (autoFc && autoFc.timeSec < dropTimeSec) {
       firstCrackTimeSec = autoFc.timeSec;
       firstCrackTemp = autoFc.beanTemp;
     }
-  } else {
-    const pt = dataPoints.find(p => p.timeSec >= (firstCrackTimeSec as number));
+  } else if (firstCrackTemp === undefined) {
+    const pt = dataPoints.find(p => p.timeSec >= firstCrackTimeSec! - 0.2);
     firstCrackTemp = pt?.beanTemp;
   }
 
-  // Calculate roast phases
-  const totalRoastSec = Math.max(1, dropTimeSec - chargeTimeSec);
-  const dryingTimeSec = dryEndTimeSec ? Math.max(0, dryEndTimeSec - chargeTimeSec) : 0;
+  // Calculate roast phases (relative to total roast duration from Charge to Drop)
+  const totalRoastSec = Number(Math.max(1, dropTimeSec - chargeTimeSec).toFixed(1));
+  const dryingTimeSec = dryEndTimeSec !== undefined ? Number(Math.max(0, dryEndTimeSec - chargeTimeSec).toFixed(1)) : 0;
   const dryingPercent = Number(((dryingTimeSec / totalRoastSec) * 100).toFixed(1));
 
   let maillardTimeSec = 0;
-  if (dryEndTimeSec && firstCrackTimeSec && firstCrackTimeSec > dryEndTimeSec) {
-    maillardTimeSec = firstCrackTimeSec - dryEndTimeSec;
+  if (dryEndTimeSec !== undefined && firstCrackTimeSec !== undefined && firstCrackTimeSec > dryEndTimeSec) {
+    maillardTimeSec = Number((firstCrackTimeSec - dryEndTimeSec).toFixed(1));
   }
   const maillardPercent = Number(((maillardTimeSec / totalRoastSec) * 100).toFixed(1));
 
   let developmentTimeSec = 0;
-  if (firstCrackTimeSec && dropTimeSec > firstCrackTimeSec) {
-    developmentTimeSec = dropTimeSec - firstCrackTimeSec;
+  if (firstCrackTimeSec !== undefined && dropTimeSec > firstCrackTimeSec) {
+    developmentTimeSec = Number((dropTimeSec - firstCrackTimeSec).toFixed(1));
   }
   const developmentPercent = Number(((developmentTimeSec / totalRoastSec) * 100).toFixed(1)); // DTR%
 
@@ -259,7 +320,7 @@ function processRawRoastPoints(
     }
   };
 
-  if (dryEndTimeSec && dryEndTemp) {
+  if (dryEndTimeSec !== undefined && dryEndTemp !== undefined) {
     events.dryEnd = {
       timeSec: dryEndTimeSec,
       temp: dryEndTemp,
@@ -268,7 +329,7 @@ function processRawRoastPoints(
     };
   }
 
-  if (firstCrackTimeSec && firstCrackTemp) {
+  if (firstCrackTimeSec !== undefined && firstCrackTemp !== undefined) {
     events.firstCrackStart = {
       timeSec: firstCrackTimeSec,
       temp: firstCrackTemp,
@@ -277,11 +338,13 @@ function processRawRoastPoints(
     };
   }
 
-  const maxRorBT = Math.max(...rorBT.filter(r => !isNaN(r)));
+  const validRors = rorBT.slice(2).filter(r => !isNaN(r) && isFinite(r));
+  const maxRorBT = validRors.length > 0 ? Math.max(...validRors) : undefined;
   const endRorBT = rorBT[rorBT.length - 1];
 
   return {
     fileName,
+    roastDate,
     durationSec: totalRoastSec,
     dataPoints,
     events,
@@ -302,7 +365,7 @@ function processRawRoastPoints(
       maillardPercent,
       developmentTimeSec,
       developmentPercent,
-      maxRorBT: isFinite(maxRorBT) ? maxRorBT : undefined,
+      maxRorBT: maxRorBT !== undefined && isFinite(maxRorBT) ? maxRorBT : undefined,
       endRorBT: isFinite(endRorBT) ? endRorBT : undefined,
     },
     rawSource
@@ -332,7 +395,8 @@ export function parseArtisanFile(fileContent: string, fileName: string): ParsedA
   // dict.timex = array of seconds
   // dict.temp1 = Environmental Temp (ET)
   // dict.temp2 = Bean Temp (BT)
-  // dict.charge, dict.dry, dict.fc, dict.drop, etc.
+  // dict.timeindex = [CHARGE, DRY, FCs, FCe, SCs, SCe, DROP, COOL] (indices into timex)
+  // dict.computed = { FCs_time, FCs_BT, DRY_time, DROP_time, TP_time, ... } (seconds relative to CHARGE)
   let timex: number[] = [];
   let temp1: number[] = [];
   let temp2: number[] = [];
@@ -343,13 +407,55 @@ export function parseArtisanFile(fileContent: string, fileName: string): ParsedA
     timex = dict.time.map(Number);
   }
 
-  // If time array is empty or relative indexes, construct sequence
   if (Array.isArray(dict.temp2)) {
     temp2 = dict.temp2.map(Number);
   }
   if (Array.isArray(dict.temp1)) {
     temp1 = dict.temp1.map(Number);
   }
+
+  // Sanitize Artisan's -1.0 (or <= 0) sensor dropout sentinel values via linear interpolation
+  const sanitizeTempArray = (arr: number[]): number[] => {
+    const cleaned = [...arr];
+    for (let i = 0; i < cleaned.length; i++) {
+      if (isNaN(cleaned[i]) || cleaned[i] <= 0) {
+        // Find previous valid
+        let prevVal: number | undefined;
+        let prevIdx = i - 1;
+        while (prevIdx >= 0) {
+          if (!isNaN(cleaned[prevIdx]) && cleaned[prevIdx] > 0) {
+            prevVal = cleaned[prevIdx];
+            break;
+          }
+          prevIdx--;
+        }
+        // Find next valid
+        let nextVal: number | undefined;
+        let nextIdx = i + 1;
+        while (nextIdx < cleaned.length) {
+          if (!isNaN(cleaned[nextIdx]) && cleaned[nextIdx] > 0) {
+            nextVal = cleaned[nextIdx];
+            break;
+          }
+          nextIdx++;
+        }
+        if (prevVal !== undefined && nextVal !== undefined) {
+          const ratio = (i - prevIdx) / (nextIdx - prevIdx);
+          cleaned[i] = Number((prevVal + (nextVal - prevVal) * ratio).toFixed(2));
+        } else if (prevVal !== undefined) {
+          cleaned[i] = prevVal;
+        } else if (nextVal !== undefined) {
+          cleaned[i] = nextVal;
+        } else {
+          cleaned[i] = 20;
+        }
+      }
+    }
+    return cleaned;
+  };
+
+  if (temp2.length > 0) temp2 = sanitizeTempArray(temp2);
+  if (temp1.length > 0) temp1 = sanitizeTempArray(temp1);
 
   if (timex.length === 0 && temp2.length > 0) {
     const samplingRate = dict.samplingrate || dict.samplinginterval || 1;
@@ -360,18 +466,92 @@ export function parseArtisanFile(fileContent: string, fileName: string): ParsedA
     temp2 = [...temp1];
   }
 
-  // Helper to extract event time from various Artisan dictionary representations
-  const getEventTime = (...keys: string[]): number | undefined => {
+  const eventsMap: {
+    charge?: number;
+    tp?: number;
+    dry?: number;
+    fc?: number;
+    fce?: number;
+    sc?: number;
+    drop?: number;
+    chargeTemp?: number;
+    tpTemp?: number;
+    dryTemp?: number;
+    fcTemp?: number;
+    dropTemp?: number;
+  } = {};
+
+  // 1. Primary Artisan native format: timeindex = [CHARGE, DRY, FCs, FCe, SCs, SCe, DROP, COOL]
+  // Note: charge index is -1 if not set (>= 0 is valid); other slots are 0 if not set (> 0 is valid).
+  if (Array.isArray(dict.timeindex) && dict.timeindex.length >= 7 && timex.length > 0) {
+    const ti = dict.timeindex.map(Number);
+    if (ti[0] >= 0 && ti[0] < timex.length) {
+      eventsMap.charge = timex[ti[0]];
+      if (temp2[ti[0]] > 0) eventsMap.chargeTemp = temp2[ti[0]];
+    }
+    if (ti[1] > 0 && ti[1] < timex.length) {
+      eventsMap.dry = timex[ti[1]];
+      if (temp2[ti[1]] > 0) eventsMap.dryTemp = temp2[ti[1]];
+    }
+    if (ti[2] > 0 && ti[2] < timex.length) {
+      eventsMap.fc = timex[ti[2]];
+      if (temp2[ti[2]] > 0) eventsMap.fcTemp = temp2[ti[2]];
+    }
+    if (ti[3] > 0 && ti[3] < timex.length) {
+      eventsMap.fce = timex[ti[3]];
+    }
+    if (ti[4] > 0 && ti[4] < timex.length) {
+      eventsMap.sc = timex[ti[4]];
+    }
+    if (ti[6] > 0 && ti[6] < timex.length) {
+      eventsMap.drop = timex[ti[6]];
+      if (temp2[ti[6]] > 0) eventsMap.dropTemp = temp2[ti[6]];
+    }
+  }
+
+  // 2. Fallback / supplement from Artisan's `computed` dictionary
+  // Note: `computed` times in Artisan are always relative to CHARGE!
+  if (dict.computed && typeof dict.computed === 'object') {
+    const comp = dict.computed;
+    const baseCharge = eventsMap.charge ?? (timex.length > 0 ? timex[0] : 0);
+
+    if (eventsMap.chargeTemp === undefined && typeof comp.CHARGE_BT === 'number') {
+      eventsMap.chargeTemp = comp.CHARGE_BT;
+    }
+    if (typeof comp.TP_time === 'number' && comp.TP_time > 0) {
+      eventsMap.tp = baseCharge + comp.TP_time;
+    }
+    if (typeof comp.TP_BT === 'number' && comp.TP_BT > 0) {
+      eventsMap.tpTemp = comp.TP_BT;
+    }
+    if (eventsMap.dry === undefined && typeof comp.DRY_time === 'number' && comp.DRY_time > 0) {
+      eventsMap.dry = baseCharge + comp.DRY_time;
+    }
+    if (eventsMap.dryTemp === undefined && typeof comp.DRY_BT === 'number' && comp.DRY_BT > 0) {
+      eventsMap.dryTemp = comp.DRY_BT;
+    }
+    if (eventsMap.fc === undefined && typeof comp.FCs_time === 'number' && comp.FCs_time > 0) {
+      eventsMap.fc = baseCharge + comp.FCs_time;
+    }
+    if (eventsMap.fcTemp === undefined && typeof comp.FCs_BT === 'number' && comp.FCs_BT > 0) {
+      eventsMap.fcTemp = comp.FCs_BT;
+    }
+    if (eventsMap.drop === undefined && typeof comp.DROP_time === 'number' && comp.DROP_time > 0) {
+      eventsMap.drop = baseCharge + comp.DROP_time;
+    }
+    if (eventsMap.dropTemp === undefined && typeof comp.DROP_BT === 'number' && comp.DROP_BT > 0) {
+      eventsMap.dropTemp = comp.DROP_BT;
+    }
+  }
+
+  // 3. Fallback to flat dictionary keys (for custom JSON exports or older formats)
+  const getFlatEventTime = (...keys: string[]): number | undefined => {
     for (const key of keys) {
       const val = dict[key];
       if (val !== undefined && val !== null && val !== -1 && val !== '') {
         const num = Number(val);
-        if (!isNaN(num)) {
-          // If val is an index in timex array and is integer
-          if (Number.isInteger(num) && num >= 0 && num < timex.length && timex.length > 0) {
-            // Check if timex[num] is plausible or if num itself was seconds
-            // If the last timex is > num, but num is also an exact index:
-            // Artisan usually stores event times as integer index of the reading
+        if (!isNaN(num) && num >= 0) {
+          if (Number.isInteger(num) && num < timex.length && timex.length > 0) {
             return timex[num];
           }
           return num;
@@ -381,65 +561,51 @@ export function parseArtisanFile(fileContent: string, fileName: string): ParsedA
     return undefined;
   };
 
-  const eventsMap: any = {};
-  
-  // Charge
-  eventsMap.charge = getEventTime('charge', 'CHARGE', 'chargetime', 'charge_time');
-  
-  // Dry End
-  eventsMap.dry = getEventTime('dry', 'DRY', 'dryend', 'dry_end', 'drytime', 'dry_time');
-  
-  // First Crack Start (supports fc, fcs, firstcrack, first_crack, fc_time, etc.)
-  eventsMap.fc = getEventTime(
-    'fc', 'FC', 'fcs', 'FCS', 'firstcrack', 'first_crack', 'firstcrackstart',
-    'fc_time', 'fcs_time', 'fcstart'
-  );
-
-  // First Crack End
-  eventsMap.fce = getEventTime('fce', 'FCE', 'firstcrackend', 'first_crack_end', 'fce_time');
-
-  // Second Crack Start
-  eventsMap.sc = getEventTime('sc', 'SC', 'scs', 'SCS', 'secondcrack', 'second_crack', 'sc_time');
-
-  // Drop
-  eventsMap.drop = getEventTime('drop', 'DROP', 'droptime', 'drop_time', 'cool', 'dump');
-
-  // Also check Artisan specialevents list if present: dict.specialevents = [[time, type, ...]]
-  if (Array.isArray(dict.specialevents)) {
-    for (const ev of dict.specialevents) {
-      if (Array.isArray(ev) && ev.length >= 2) {
-        const evTime = Number(ev[0]);
-        const evType = String(ev[1]).toLowerCase();
-        if (!isNaN(evTime)) {
-          if ((evType.includes('first') || evType.includes('fc')) && eventsMap.fc === undefined) {
-            eventsMap.fc = evTime;
-          } else if (evType.includes('dry') && eventsMap.dry === undefined) {
-            eventsMap.dry = evTime;
-          } else if (evType.includes('drop') && eventsMap.drop === undefined) {
-            eventsMap.drop = evTime;
-          } else if (evType.includes('charge') && eventsMap.charge === undefined) {
-            eventsMap.charge = evTime;
-          }
-        }
-      }
-    }
+  if (eventsMap.charge === undefined) {
+    eventsMap.charge = getFlatEventTime('charge', 'CHARGE', 'chargetime', 'charge_time');
+  }
+  if (eventsMap.dry === undefined) {
+    eventsMap.dry = getFlatEventTime('dry', 'DRY', 'dryend', 'dry_end', 'drytime', 'dry_time');
+  }
+  if (eventsMap.fc === undefined) {
+    eventsMap.fc = getFlatEventTime(
+      'fc', 'FC', 'fcs', 'FCS', 'firstcrack', 'first_crack', 'firstcrackstart',
+      'fc_time', 'fcs_time', 'fcstart'
+    );
+  }
+  if (eventsMap.fce === undefined) {
+    eventsMap.fce = getFlatEventTime('fce', 'FCE', 'firstcrackend', 'first_crack_end', 'fce_time');
+  }
+  if (eventsMap.sc === undefined) {
+    eventsMap.sc = getFlatEventTime('sc', 'SC', 'scs', 'SCS', 'secondcrack', 'second_crack', 'sc_time');
+  }
+  if (eventsMap.drop === undefined) {
+    eventsMap.drop = getFlatEventTime('drop', 'DROP', 'droptime', 'drop_time', 'cool', 'dump');
   }
 
-  // Adjust relative times if events are given relative to Charge
-  if (eventsMap.charge !== undefined && eventsMap.charge > 0) {
-    if (eventsMap.fc !== undefined && eventsMap.fc > 0 && eventsMap.fc < eventsMap.charge) {
-      // fc was given in seconds since charge!
-      eventsMap.fc = eventsMap.charge + eventsMap.fc;
-    }
-    if (eventsMap.dry !== undefined && eventsMap.dry > 0 && eventsMap.dry < eventsMap.charge) {
-      eventsMap.dry = eventsMap.charge + eventsMap.dry;
-    }
-    if (eventsMap.drop !== undefined && eventsMap.drop > 0 && eventsMap.drop < eventsMap.charge) {
-      eventsMap.drop = eventsMap.charge + eventsMap.drop;
-    }
+  // Extract roast date if present in .alog (e.g. roastisodate: '2026-10-12', roasttime: '17:25:34')
+  let roastDate: string | undefined;
+  if (dict.roastisodate) {
+    roastDate = dict.roasttime
+      ? `${dict.roastisodate}T${String(dict.roasttime).slice(0, 5)}`
+      : String(dict.roastisodate);
   }
 
-  return processRawRoastPoints(timex, temp2, temp1, eventsMap, fileName, fileContent);
+  let greenWeightGrams: number | undefined;
+  let roastedWeightGrams: number | undefined;
+  if (Array.isArray(dict.weight) && dict.weight.length >= 2) {
+    const wIn = Number(dict.weight[0]);
+    const wOut = Number(dict.weight[1]);
+    const unit = String(dict.weight[2] || 'g').toLowerCase();
+    const factor = unit === 'kg' ? 1000 : unit === 'lb' ? 453.592 : 1;
+    if (!isNaN(wIn) && wIn > 0) greenWeightGrams = Math.round(wIn * factor);
+    if (!isNaN(wOut) && wOut > 0) roastedWeightGrams = Math.round(wOut * factor);
+  }
+
+  const parsed = processRawRoastPoints(timex, temp2, temp1, eventsMap, fileName, fileContent, roastDate);
+  if (greenWeightGrams !== undefined) parsed.greenWeightGrams = greenWeightGrams;
+  if (roastedWeightGrams !== undefined) parsed.roastedWeightGrams = roastedWeightGrams;
+  return parsed;
 }
 
 /**

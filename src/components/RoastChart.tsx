@@ -160,9 +160,12 @@ export const RoastChart: React.FC<RoastChartProps> = ({
       label: string,
       color: string
     ) => {
-      if (timeSec === undefined) return;
+      if (timeSec === undefined || parsedLog.dataPoints.length === 0) return;
       const timeStr = formatTime(timeSec);
-      const index = parsedLog.dataPoints.findIndex(p => p.timeSec >= timeSec);
+      let index = parsedLog.dataPoints.findIndex(p => p.timeSec >= timeSec - 0.2);
+      if (index === -1 && timeSec >= parsedLog.dataPoints[parsedLog.dataPoints.length - 1].timeSec - 5) {
+        index = parsedLog.dataPoints.length - 1;
+      }
       if (index === -1) return;
 
       annotations[id] = {
@@ -382,9 +385,15 @@ export const RoastChart: React.FC<RoastChartProps> = ({
       )}
 
       {/* Interactive Chart Canvas */}
-      <div style={{ height: `${height}px` }} className="relative w-full">
-        <Line data={chartData} options={chartOptions} />
-      </div>
+      {parsedLog.dataPoints.length > 0 ? (
+        <div style={{ height: `${height}px` }} className="relative w-full">
+          <Line data={chartData} options={chartOptions} />
+        </div>
+      ) : (
+        <div className="py-8 px-4 bg-stone-900/50 border border-stone-800/80 rounded-lg text-center text-xs text-stone-400">
+          Key Artisan roast milestones loaded from Google Sheets. Connect Google Drive or attach the <code className="text-amber-400">.alog</code> file to view the full second-by-second temperature &amp; RoR curve.
+        </div>
+      )}
 
       {/* Milestone Cards Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-4 pt-3 border-t border-roast-border text-xs">
@@ -402,8 +411,9 @@ export const RoastChart: React.FC<RoastChartProps> = ({
             <Clock className="w-3 h-3 text-yellow-500" /> Turning Point
           </div>
           <div className="font-mono font-semibold text-roast-text mt-0.5">
-            {metrics.turningPointTimeSec ? formatTime(metrics.turningPointTimeSec) : 'N/A'} (
-            {metrics.turningPointTemp ? `${convertTemp(metrics.turningPointTemp)}°` : ''})
+            {metrics.turningPointTimeSec !== undefined
+              ? `${formatTime(metrics.turningPointTimeSec)}${metrics.turningPointTemp ? ` (${convertTemp(metrics.turningPointTemp)}°)` : ''}`
+              : 'N/A'}
           </div>
         </div>
 
@@ -412,27 +422,29 @@ export const RoastChart: React.FC<RoastChartProps> = ({
             <Activity className="w-3 h-3 text-emerald-500" /> Dry End
           </div>
           <div className="font-mono font-semibold text-roast-text mt-0.5">
-            {metrics.dryEndTimeSec ? formatTime(metrics.dryEndTimeSec) : 'N/A'} (
-            {metrics.dryEndTemp ? `${convertTemp(metrics.dryEndTemp)}°` : ''})
+            {metrics.dryEndTimeSec !== undefined
+              ? `${formatTime(metrics.dryEndTimeSec)}${metrics.dryEndTemp ? ` (${convertTemp(metrics.dryEndTemp)}°)` : ''}`
+              : 'N/A'}
           </div>
         </div>
 
-        <div className="bg-stone-900/60 p-2 rounded border border-stone-800">
-          <div className="text-stone-400 flex items-center gap-1">
+        <div className="bg-stone-900/80 p-2 rounded border border-pink-900/50">
+          <div className="text-pink-300 flex items-center gap-1 font-medium">
             <Flame className="w-3 h-3 text-pink-500" /> First Crack
           </div>
-          <div className="font-mono font-semibold text-roast-text mt-0.5">
-            {metrics.firstCrackTimeSec ? formatTime(metrics.firstCrackTimeSec) : 'N/A'} (
-            {metrics.firstCrackTemp ? `${convertTemp(metrics.firstCrackTemp)}°` : ''})
+          <div className="font-mono font-bold text-pink-200 mt-0.5">
+            {metrics.firstCrackTimeSec !== undefined
+              ? `${formatTime(metrics.firstCrackTimeSec)}${metrics.firstCrackTemp ? ` (${convertTemp(metrics.firstCrackTemp)}°)` : ''}`
+              : 'Not recorded'}
           </div>
         </div>
 
-        <div className="bg-stone-900/60 p-2 rounded border border-stone-800 col-span-2 sm:col-span-1">
-          <div className="text-stone-400 flex items-center gap-1">
-            <Flame className="w-3 h-3 text-rose-500" /> Drop (DTR)
+        <div className="bg-stone-900/80 p-2 rounded border border-amber-900/50 col-span-2 sm:col-span-1">
+          <div className="text-amber-300 flex items-center gap-1 font-medium">
+            <Flame className="w-3 h-3 text-amber-500" /> DTR &amp; Drop
           </div>
-          <div className="font-mono font-semibold text-rose-400 mt-0.5">
-            {formatTime(metrics.dropTimeSec)} ({metrics.developmentPercent}%)
+          <div className="font-mono font-bold text-amber-400 mt-0.5">
+            {metrics.developmentPercent}% ({formatTime(metrics.dropTimeSec)}{metrics.dropTemp ? ` @ ${convertTemp(metrics.dropTemp)}°` : ''})
           </div>
         </div>
       </div>

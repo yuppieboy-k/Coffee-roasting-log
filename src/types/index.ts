@@ -51,6 +51,8 @@ export interface RoastDataPoint {
 export interface ParsedArtisanLog {
   fileName: string;
   roastDate?: string;
+  greenWeightGrams?: number;
+  roastedWeightGrams?: number;
   durationSec: number;
   dataPoints: RoastDataPoint[];
   events: {

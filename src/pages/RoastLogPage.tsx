@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AppSettings,
   ParsedArtisanLog,
@@ -84,6 +84,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
   });
   const [uploadedArtisanLog, setUploadedArtisanLog] = useState<ParsedArtisanLog | null>(null);
   const [isLoadingDriveFiles, setIsLoadingDriveFiles] = useState(false);
+  const [isHydratingSelectedLog, setIsHydratingSelectedLog] = useState(false);
   const [driveArtisanFiles, setDriveArtisanFiles] = useState<{ id: string; name: string; modifiedTime?: string }[]>([]);
   const [driveFetchError, setDriveFetchError] = useState<string | null>(null);
   const [isAuthenticatingDrive, setIsAuthenticatingDrive] = useState(false);
@@ -91,6 +92,89 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
 
   // Selected Log
   const selectedLog = logs.find(l => l.id === selectedLogId) || logs[0];
+
+  // Format seconds as mm:ss
+  const formatDuration = (sec?: number) => {
+    if (sec === undefined || isNaN(sec)) return 'N/A';
+    const mins = Math.floor(sec / 60);
+    const secs = Math.floor(sec % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // Convert temperature based on user setting
+  const displayTemp = (tempC?: number) => {
+    if (tempC === undefined || isNaN(tempC) || tempC <= 0) return 'N/A';
+    if (settings.temperatureUnit === 'F') {
+      return `${Number(((tempC * 9) / 5 + 32).toFixed(1))}°F`;
+    }
+    return `${Number(tempC.toFixed(1))}°C`;
+  };
+
+  // Auto-hydrate or re-parse selectedLog from Google Drive if it has a Drive file ID
+  // but is missing curve points or First Crack metrics
+  useEffect(() => {
+    if (!selectedLog) return;
+    const needsHydration =
+      !selectedLog.artisanLogParsed ||
+      selectedLog.artisanLogParsed.dataPoints.length === 0 ||
+      selectedLog.artisanLogParsed.metrics.firstCrackTimeSec === undefined;
+
+    if (needsHydration && selectedLog.artisanLogDriveFileId && googleDriveService.hasValidToken() && !isHydratingSelectedLog) {
+      let cancelled = false;
+      setIsHydratingSelectedLog(true);
+      googleDriveService
+        .downloadFileContent(selectedLog.artisanLogDriveFileId)
+        .then(content => {
+          if (cancelled) return;
+          const parsed = parseArtisanFile(
+            content,
+            selectedLog.artisanLogDriveFileName || 'Artisan_Log.alog'
+          );
+          onSaveLog({
+            ...selectedLog,
+            artisanLogParsed: parsed,
+            updatedAt: new Date().toISOString(),
+          });
+        })
+        .catch(err => {
+          console.warn('Auto-hydration of Artisan file from Drive failed:', err);
+        })
+        .finally(() => {
+          if (!cancelled) setIsHydratingSelectedLog(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [selectedLog?.id, selectedLog?.artisanLogDriveFileId]);
+
+  // Manual reload of linked Artisan file from Drive
+  const handleReloadSelectedLogArtisan = async (log: RoastLog) => {
+    if (!log.artisanLogDriveFileId) return;
+    setIsHydratingSelectedLog(true);
+    try {
+      if (!googleDriveService.hasValidToken()) {
+        if (!settings.googleDrive.clientId) {
+          alert('Please configure your Google Cloud OAuth Client ID in Settings first.');
+          return;
+        }
+        await googleDriveService.loadGoogleScripts();
+        googleDriveService.initTokenClient(settings.googleDrive.clientId);
+        await googleDriveService.requestAccessToken();
+      }
+      const content = await googleDriveService.downloadFileContent(log.artisanLogDriveFileId);
+      const parsed = parseArtisanFile(content, log.artisanLogDriveFileName || 'Artisan_Log.alog');
+      onSaveLog({
+        ...log,
+        artisanLogParsed: parsed,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      alert(`Could not reload Artisan file from Google Drive: ${err.message}`);
+    } finally {
+      setIsHydratingSelectedLog(false);
+    }
+  };
 
   // Roaster and Bean lookups
   const getRoasterName = (id: string) =>
@@ -123,22 +207,18 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
   // Open Create Modal
   const handleOpenCreateModal = () => {
     setEditingLogId(null);
-    const sampleLog = createSampleArtisanLog(
-      'Ethiopia_Yirgacheffe_Washed_Filter.alog',
-      'Excellent'
-    );
     setFormData({
       date: new Date().toISOString().slice(0, 16),
       roasterId: settings.roasters[0]?.id || '',
       beanId: settings.greenBeans[0]?.id || '',
-      greenWeightGrams: 250,
-      roastedWeightGrams: 214,
+      greenWeightGrams: 400,
+      roastedWeightGrams: 345,
       rating: 'Excellent',
-      tastingNotes: 'Crisp bergamot, candied peach, delicate jasmine tea body with bright citric acidity.',
-      flavorDescriptors: ['Bergamot', 'Peach', 'Jasmine', 'Clean Acidity'],
+      tastingNotes: '',
+      flavorDescriptors: [],
       roastDegree: 'City',
     });
-    setUploadedArtisanLog(sampleLog);
+    setUploadedArtisanLog(null);
     setIsModalOpen(true);
     setDriveFetchError(null);
     checkAndFetchDriveFiles(false);
@@ -160,7 +240,20 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
       artisanLogDriveFileId: log.artisanLogDriveFileId,
       artisanLogDriveFileName: log.artisanLogDriveFileName,
     });
-    setUploadedArtisanLog(log.artisanLogParsed || null);
+    // If cached rawSource exists, ensure it's freshly parsed with latest Artisan parser
+    if (log.artisanLogParsed?.rawSource) {
+      try {
+        const reparsed = parseArtisanFile(
+          log.artisanLogParsed.rawSource,
+          log.artisanLogDriveFileName || log.artisanLogParsed.fileName
+        );
+        setUploadedArtisanLog(reparsed);
+      } catch {
+        setUploadedArtisanLog(log.artisanLogParsed);
+      }
+    } else {
+      setUploadedArtisanLog(log.artisanLogParsed || null);
+    }
     setIsModalOpen(true);
     setDriveFetchError(null);
     checkAndFetchDriveFiles(false, log.artisanLogDriveFileId, log.artisanLogDriveFileName);
@@ -253,6 +346,9 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
       setFormData(prev => ({
         ...prev,
         artisanLogDriveFileName: file.name,
+        ...(parsed.roastDate && !editingLogId ? { date: parsed.roastDate } : {}),
+        ...(parsed.greenWeightGrams && !editingLogId ? { greenWeightGrams: parsed.greenWeightGrams } : {}),
+        ...(parsed.roastedWeightGrams && !editingLogId ? { roastedWeightGrams: parsed.roastedWeightGrams } : {}),
       }));
     } catch (err: any) {
       alert(`Could not parse Artisan log file: ${err.message}`);
@@ -270,6 +366,9 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
         ...prev,
         artisanLogDriveFileId: fileId,
         artisanLogDriveFileName: fileName,
+        ...(parsed.roastDate && !editingLogId ? { date: parsed.roastDate } : {}),
+        ...(parsed.greenWeightGrams && !editingLogId ? { greenWeightGrams: parsed.greenWeightGrams } : {}),
+        ...(parsed.roastedWeightGrams && !editingLogId ? { roastedWeightGrams: parsed.roastedWeightGrams } : {}),
       }));
     } catch (err: any) {
       alert(`Failed to load Artisan file from Drive: ${err.message}`);
@@ -450,16 +549,29 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
 
                     {/* Artisan curve tag */}
                     <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-stone-800/80 text-[11px]">
-                      <span className="text-stone-500 flex items-center gap-1">
-                        <FileCheck className="w-3.5 h-3.5 text-amber-500" />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <FileCheck className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
                         {log.artisanLogParsed ? (
-                          <span className="text-amber-400/90 font-mono">
-                            Artisan Curve ({Math.round(log.artisanLogParsed.metrics.totalTimeSec / 60)}m, DTR {log.artisanLogParsed.metrics.developmentPercent}%)
+                          <div className="flex flex-wrap items-center gap-1.5 font-mono">
+                            <span className="px-1.5 py-0.5 rounded bg-pink-950/60 border border-pink-800/60 text-pink-300 font-semibold">
+                              FC: {formatDuration(log.artisanLogParsed.metrics.firstCrackTimeSec)}
+                              {log.artisanLogParsed.metrics.firstCrackTemp ? ` (${displayTemp(log.artisanLogParsed.metrics.firstCrackTemp)})` : ''}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300 font-semibold">
+                              DTR: {log.artisanLogParsed.metrics.developmentPercent}%
+                            </span>
+                            <span className="text-stone-400">
+                              {formatDuration(log.artisanLogParsed.metrics.totalTimeSec)}
+                            </span>
+                          </div>
+                        ) : log.artisanLogDriveFileName ? (
+                          <span className="text-amber-400/80 font-mono truncate max-w-[180px]">
+                            Linked: {log.artisanLogDriveFileName}
                           </span>
                         ) : (
                           <span className="text-stone-500">No curve attached</span>
                         )}
-                      </span>
+                      </div>
 
                       <div className="flex items-center gap-2">
                         <button
@@ -526,6 +638,17 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {selectedLog.artisanLogDriveFileId && (
+                      <button
+                        onClick={() => handleReloadSelectedLogArtisan(selectedLog)}
+                        disabled={isHydratingSelectedLog}
+                        className="px-2.5 py-1.5 rounded-lg bg-stone-900 border border-stone-800 text-xs text-stone-300 hover:text-amber-400 transition flex items-center gap-1 disabled:opacity-50"
+                        title="Reload .alog file from Google Drive"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isHydratingSelectedLog ? 'animate-spin text-amber-500' : ''}`} />
+                        {isHydratingSelectedLog ? 'Loading...' : 'Reload .alog'}
+                      </button>
+                    )}
                     {onSelectBeanForResearch && selectedLog.beanId && (
                       <button
                         onClick={() => onSelectBeanForResearch(selectedLog.beanId)}
@@ -544,7 +667,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                 </div>
 
                 {/* Batch Metrics Pills */}
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mt-4 pt-3 border-t border-roast-border text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-3 border-t border-roast-border text-xs">
                   <div className="bg-stone-900/80 p-2.5 rounded-lg border border-stone-800">
                     <span className="text-stone-500 block text-[11px]">Green Weight</span>
                     <span className="font-mono font-semibold text-stone-200 mt-0.5 block">
@@ -573,6 +696,66 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                     </span>
                   </div>
                 </div>
+
+                {/* Key Artisan Roast Milestones (First Crack, DTR %, Charge, Dry End, Drop) */}
+                {selectedLog.artisanLogParsed && (
+                  <div className="mt-3 pt-3 border-t border-stone-800/80">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400/90 flex items-center gap-1.5">
+                        <Flame className="w-3.5 h-3.5 text-amber-500" />
+                        Artisan Key Metrics ({selectedLog.artisanLogDriveFileName || selectedLog.artisanLogParsed.fileName})
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
+                      <div className="bg-stone-900/90 p-2.5 rounded-lg border border-stone-800">
+                        <span className="text-stone-400 block text-[10px] uppercase">Charge Temp</span>
+                        <span className="font-mono font-bold text-stone-200 mt-0.5 block">
+                          {displayTemp(selectedLog.artisanLogParsed.metrics.chargeTemp)}
+                        </span>
+                      </div>
+
+                      <div className="bg-stone-900/90 p-2.5 rounded-lg border border-stone-800">
+                        <span className="text-stone-400 block text-[10px] uppercase">Dry End</span>
+                        <span className="font-mono font-bold text-emerald-400 mt-0.5 block">
+                          {formatDuration(selectedLog.artisanLogParsed.metrics.dryEndTimeSec)}
+                          {selectedLog.artisanLogParsed.metrics.dryEndTemp
+                            ? ` (${displayTemp(selectedLog.artisanLogParsed.metrics.dryEndTemp)})`
+                            : ''}
+                        </span>
+                      </div>
+
+                      <div className="bg-pink-950/30 p-2.5 rounded-lg border border-pink-800/60">
+                        <span className="text-pink-300 font-semibold block text-[10px] uppercase">First Crack</span>
+                        <span className="font-mono font-bold text-pink-200 mt-0.5 block">
+                          {selectedLog.artisanLogParsed.metrics.firstCrackTimeSec !== undefined
+                            ? `${formatDuration(selectedLog.artisanLogParsed.metrics.firstCrackTimeSec)}${
+                                selectedLog.artisanLogParsed.metrics.firstCrackTemp
+                                  ? ` (${displayTemp(selectedLog.artisanLogParsed.metrics.firstCrackTemp)})`
+                                  : ''
+                              }`
+                            : 'Not recorded'}
+                        </span>
+                      </div>
+
+                      <div className="bg-amber-950/30 p-2.5 rounded-lg border border-amber-700/60">
+                        <span className="text-amber-300 font-semibold block text-[10px] uppercase">DTR (Dev Ratio)</span>
+                        <span className="font-mono font-bold text-amber-400 mt-0.5 block">
+                          {selectedLog.artisanLogParsed.metrics.developmentPercent}% ({formatDuration(selectedLog.artisanLogParsed.metrics.developmentTimeSec)})
+                        </span>
+                      </div>
+
+                      <div className="bg-stone-900/90 p-2.5 rounded-lg border border-stone-800 col-span-2 sm:col-span-1">
+                        <span className="text-stone-400 block text-[10px] uppercase">Drop / Total</span>
+                        <span className="font-mono font-bold text-rose-400 mt-0.5 block">
+                          {formatDuration(selectedLog.artisanLogParsed.metrics.totalTimeSec)}
+                          {selectedLog.artisanLogParsed.metrics.dropTemp
+                            ? ` (${displayTemp(selectedLog.artisanLogParsed.metrics.dropTemp)})`
+                            : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Tasting Notes & Descriptors */}
                 <div className="mt-4 pt-3 border-t border-roast-border">
@@ -961,6 +1144,62 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                     Generate Sample Curve
                   </button>
                 </div>
+
+                {/* Live Parsed Artisan Metrics Preview in Modal */}
+                {uploadedArtisanLog && (
+                  <div className="pt-2 border-t border-stone-800/90 space-y-1.5">
+                    <div className="text-[11px] font-semibold text-amber-400 flex items-center justify-between">
+                      <span>Parsed Artisan Milestones ({uploadedArtisanLog.fileName})</span>
+                      <span className="font-mono text-stone-400">
+                        Total: {formatDuration(uploadedArtisanLog.metrics.totalTimeSec)}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+                      <div className="bg-stone-950/90 p-2 rounded border border-stone-800">
+                        <span className="text-stone-400 block text-[10px]">Charge</span>
+                        <span className="font-mono font-bold text-stone-200">
+                          {displayTemp(uploadedArtisanLog.metrics.chargeTemp)}
+                        </span>
+                      </div>
+                      <div className="bg-stone-950/90 p-2 rounded border border-stone-800">
+                        <span className="text-stone-400 block text-[10px]">Turning Pt</span>
+                        <span className="font-mono font-bold text-stone-200">
+                          {formatDuration(uploadedArtisanLog.metrics.turningPointTimeSec)}
+                          {uploadedArtisanLog.metrics.turningPointTemp
+                            ? ` (${displayTemp(uploadedArtisanLog.metrics.turningPointTemp)})`
+                            : ''}
+                        </span>
+                      </div>
+                      <div className="bg-stone-950/90 p-2 rounded border border-stone-800">
+                        <span className="text-stone-400 block text-[10px]">Dry End</span>
+                        <span className="font-mono font-bold text-emerald-400">
+                          {formatDuration(uploadedArtisanLog.metrics.dryEndTimeSec)}
+                          {uploadedArtisanLog.metrics.dryEndTemp
+                            ? ` (${displayTemp(uploadedArtisanLog.metrics.dryEndTemp)})`
+                            : ''}
+                        </span>
+                      </div>
+                      <div className="bg-pink-950/40 p-2 rounded border border-pink-800/70">
+                        <span className="text-pink-300 font-semibold block text-[10px]">First Crack</span>
+                        <span className="font-mono font-bold text-pink-200">
+                          {uploadedArtisanLog.metrics.firstCrackTimeSec !== undefined
+                            ? `${formatDuration(uploadedArtisanLog.metrics.firstCrackTimeSec)}${
+                                uploadedArtisanLog.metrics.firstCrackTemp
+                                  ? ` (${displayTemp(uploadedArtisanLog.metrics.firstCrackTemp)})`
+                                  : ''
+                              }`
+                            : 'Not recorded'}
+                        </span>
+                      </div>
+                      <div className="bg-amber-950/40 p-2 rounded border border-amber-700/70 col-span-2 sm:col-span-1">
+                        <span className="text-amber-300 font-semibold block text-[10px]">DTR &amp; Drop</span>
+                        <span className="font-mono font-bold text-amber-400">
+                          {uploadedArtisanLog.metrics.developmentPercent}% ({formatDuration(uploadedArtisanLog.metrics.developmentTimeSec)})
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Tasting Notes */}

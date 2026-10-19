@@ -921,7 +921,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             <div className="pt-3 border-t border-stone-800 text-[11px] text-stone-500 flex items-center justify-between">
               <span>RoastCraft PWA Edition</span>
               <span className="font-mono bg-stone-900 px-2 py-0.5 rounded border border-stone-800 text-stone-400">
-                Version 1.1.0
+                Version 1.2.0
               </span>
             </div>
           </div>

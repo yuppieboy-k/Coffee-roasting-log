@@ -45,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   PWA
                 </span>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-900 text-stone-400 border border-stone-800">
-                  v1.1.0
+                  v1.2.0
                 </span>
               </div>
               <p className="text-[11px] text-roast-muted leading-none hidden sm:block">
