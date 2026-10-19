@@ -108,8 +108,8 @@ export class SheetSyncService {
         escapeCsvField(l.greenWeightGrams ?? ''),
         escapeCsvField(l.roastedWeightGrams ?? ''),
         escapeCsvField(l.weightLossPercent ?? ''),
-        escapeCsvField(l.rating),
-        escapeCsvField(l.roastDegree || 'City'),
+        escapeCsvField(l.rating || 'Not tasted'),
+        escapeCsvField(l.roastDegree || ''),
         escapeCsvField(m?.totalTimeSec ?? ''),
         escapeCsvField(m?.developmentPercent ?? ''),
         escapeCsvField(m?.firstCrackTimeSec ?? ''),
@@ -462,17 +462,17 @@ export class SheetSyncService {
       if (!r || r.length === 0 || !r[0]?.trim()) continue;
 
       const id = idIdx !== -1 && r[idIdx] ? r[idIdx] : `roast-${Date.now()}-${i}`;
-      const date = dateIdx !== -1 && r[dateIdx] ? r[dateIdx] : new Date().toISOString();
-      const roasterId = roasterIdIdx !== -1 ? r[roasterIdIdx] : 'roaster-1';
-      const beanId = beanIdIdx !== -1 ? r[beanIdIdx] : 'bean-1';
-      const greenWeightGrams = greenWtIdx !== -1 && r[greenWtIdx] ? Number(r[greenWtIdx]) : 250;
-      const roastedWeightGrams = roastedWtIdx !== -1 && r[roastedWtIdx] ? Number(r[roastedWtIdx]) : undefined;
+      const date = dateIdx !== -1 && r[dateIdx] ? r[dateIdx] : '';
+      const roasterId = roasterIdIdx !== -1 ? r[roasterIdIdx] : '';
+      const beanId = beanIdIdx !== -1 ? r[beanIdIdx] : '';
+      const greenWeightGrams = greenWtIdx !== -1 && r[greenWtIdx]?.trim() ? Number(r[greenWtIdx]) : undefined;
+      const roastedWeightGrams = roastedWtIdx !== -1 && r[roastedWtIdx]?.trim() ? Number(r[roastedWtIdx]) : undefined;
       const weightLossPercent = greenWeightGrams && roastedWeightGrams
         ? Number((((greenWeightGrams - roastedWeightGrams) / greenWeightGrams) * 100).toFixed(1))
         : undefined;
 
-      const rating = (ratingIdx !== -1 && r[ratingIdx] ? r[ratingIdx] : 'Excellent') as any;
-      const roastDegree = (degreeIdx !== -1 && r[degreeIdx] ? r[degreeIdx] : 'City') as any;
+      const rating = (ratingIdx !== -1 && r[ratingIdx]?.trim() ? r[ratingIdx].trim() : 'Not tasted') as any;
+      const roastDegree = (degreeIdx !== -1 && r[degreeIdx]?.trim() ? r[degreeIdx].trim() : '') as any;
       const tastingNotes = notesIdx !== -1 && r[notesIdx] ? r[notesIdx] : '';
       const flavorDescriptors = descIdx !== -1 && r[descIdx]
         ? r[descIdx].split(',').map(s => s.trim()).filter(Boolean)

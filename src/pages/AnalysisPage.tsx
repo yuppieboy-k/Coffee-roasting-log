@@ -23,6 +23,7 @@ interface AnalysisPageProps {
 }
 
 const RATING_COLORS: Record<RoastRating, string> = {
+  'Not tasted': '#64748b', // slate-500
   Excellent: '#10b981', // emerald
   'Very good': '#14b8a6', // teal
   Good: '#f59e0b', // amber
@@ -54,7 +55,7 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({ logs, settings }) =>
       if (selectedRating !== 'ALL' && log.rating !== selectedRating) return false;
       if (keywordQuery.trim()) {
         const query = keywordQuery.toLowerCase();
-        const matchesNotes = log.tastingNotes.toLowerCase().includes(query);
+        const matchesNotes = (log.tastingNotes || '').toLowerCase().includes(query);
         const matchesTags = log.flavorDescriptors?.some(t => t.toLowerCase().includes(query));
         if (!matchesNotes && !matchesTags) return false;
       }
@@ -70,6 +71,7 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({ logs, settings }) =>
 
     // Rating Counts
     const ratingCounts: Record<RoastRating, number> = {
+      'Not tasted': 0,
       Excellent: 0,
       'Very good': 0,
       Good: 0,
@@ -226,6 +228,7 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({ logs, settings }) =>
               className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
             >
               <option value="ALL">All Classifications</option>
+              <option value="Not tasted">Not tasted</option>
               <option value="Excellent">Excellent</option>
               <option value="Very good">Very good</option>
               <option value="Good">Good</option>
@@ -303,7 +306,7 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({ logs, settings }) =>
           </h3>
 
           <div className="space-y-2.5">
-            {(['Excellent', 'Very good', 'Good', 'OK', 'Bad'] as RoastRating[]).map((rating) => {
+            {(['Not tasted', 'Excellent', 'Very good', 'Good', 'OK', 'Bad'] as RoastRating[]).map((rating) => {
               const count = stats.ratingCounts[rating] || 0;
               const percent = stats.totalBatches > 0 ? (count / stats.totalBatches) * 100 : 0;
               const color = RATING_COLORS[rating];
@@ -440,10 +443,12 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({ logs, settings }) =>
                       />
                     </td>
                     <td className="py-2.5 px-3 font-mono text-stone-300">
-                      {new Date(log.date).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
+                      {log.date
+                        ? new Date(log.date).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                          })
+                        : 'No Date'}
                     </td>
                     <td className="py-2.5 px-3 font-semibold text-stone-200">
                       {getBeanName(log.beanId)}
@@ -455,8 +460,8 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({ logs, settings }) =>
                       <span
                         className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
                         style={{
-                          backgroundColor: `${RATING_COLORS[log.rating]}20`,
-                          color: RATING_COLORS[log.rating],
+                          backgroundColor: `${RATING_COLORS[log.rating] || RATING_COLORS['Not tasted']}20`,
+                          color: RATING_COLORS[log.rating] || RATING_COLORS['Not tasted'],
                         }}
                       >
                         {log.rating}

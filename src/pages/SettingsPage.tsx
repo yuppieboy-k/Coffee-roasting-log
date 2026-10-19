@@ -921,7 +921,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             <div className="pt-3 border-t border-stone-800 text-[11px] text-stone-500 flex items-center justify-between">
               <span>RoastCraft PWA Edition</span>
               <span className="font-mono bg-stone-900 px-2 py-0.5 rounded border border-stone-800 text-stone-400">
-                Version 1.2.0
+                Version 1.3.0
               </span>
             </div>
           </div>
@@ -930,8 +930,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
       {/* Modal: Add/Edit Roaster */}
       {isRoasterModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-roast-surface border border-roast-border rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-start justify-center p-4 pt-6 overflow-y-auto">
+          <div className="bg-roast-surface border border-roast-border rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 my-2">
             <h3 className="text-base font-semibold text-roast-text flex items-center gap-2">
               <Flame className="w-5 h-5 text-amber-500" />
               {editingRoasterId ? 'Edit Roaster' : 'Add Roaster'}
@@ -1024,8 +1024,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
       {/* Modal: Add/Edit Green Bean */}
       {isBeanModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-roast-surface border border-roast-border rounded-xl p-6 max-w-lg w-full shadow-2xl space-y-4 my-8">
+        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-start justify-center p-4 pt-6 overflow-y-auto">
+          <div className="bg-roast-surface border border-roast-border rounded-xl p-6 max-w-lg w-full shadow-2xl space-y-4 my-2">
             <h3 className="text-base font-semibold text-roast-text flex items-center gap-2">
               <Coffee className="w-5 h-5 text-amber-500" />
               {editingBeanId ? 'Edit Green Bean' : 'Add Green Bean'}

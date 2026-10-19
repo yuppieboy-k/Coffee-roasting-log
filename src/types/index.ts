@@ -1,5 +1,5 @@
-export type RoastRating = 'Excellent' | 'Very good' | 'Good' | 'OK' | 'Bad';
-export type RoastDegree = 'Light' | 'Cinnamon' | 'City' | 'City+' | 'Full City' | 'Dark';
+export type RoastRating = 'Not tasted' | 'Excellent' | 'Very good' | 'Good' | 'OK' | 'Bad';
+export type RoastDegree = 'Light' | 'Cinnamon' | 'City' | 'City+' | 'Full City' | 'Dark' | '';
 
 export interface Roaster {
   id: string;
@@ -95,13 +95,13 @@ export interface RoastLog {
   beanId: string;
   title?: string;
   batchNumber?: number;
-  greenWeightGrams: number;
+  greenWeightGrams?: number;
   roastedWeightGrams?: number;
   weightLossPercent?: number; // calculated: (green - roasted) / green * 100
   rating: RoastRating;
   tastingNotes: string;
   flavorDescriptors?: string[]; // e.g. ['Bergamot', 'Jasmine', 'Peach']
-  roastDegree?: 'Light' | 'Cinnamon' | 'City' | 'City+' | 'Full City' | 'Dark';
+  roastDegree?: RoastDegree;
   
   // Artisan Log Connection
   artisanLogDriveFileId?: string;

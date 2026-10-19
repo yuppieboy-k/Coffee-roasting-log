@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AppSettings,
   ParsedArtisanLog,
@@ -37,6 +37,7 @@ interface RoastLogPageProps {
 }
 
 const RATING_COLORS: Record<RoastRating, { bg: string; text: string; border: string }> = {
+  'Not tasted': { bg: 'bg-slate-900/90', text: 'text-slate-300', border: 'border-slate-700' },
   Excellent: { bg: 'bg-emerald-950/80', text: 'text-emerald-400', border: 'border-emerald-600/70' },
   'Very good': { bg: 'bg-teal-950/80', text: 'text-teal-300', border: 'border-teal-600/70' },
   Good: { bg: 'bg-amber-950/80', text: 'text-amber-400', border: 'border-amber-600/70' },
@@ -69,18 +70,19 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const modalBodyRef = useRef<HTMLDivElement | null>(null);
 
-  // New/Edit Log Form State
+  // New/Edit Log Form State (unpopulated by default, except 'Not tasted' rating)
   const [formData, setFormData] = useState<Partial<RoastLog>>({
-    date: new Date().toISOString().slice(0, 16),
-    roasterId: settings.roasters[0]?.id || '',
-    beanId: settings.greenBeans[0]?.id || '',
-    greenWeightGrams: 250,
-    roastedWeightGrams: 215,
-    rating: 'Excellent',
+    date: '',
+    roasterId: '',
+    beanId: '',
+    greenWeightGrams: undefined,
+    roastedWeightGrams: undefined,
+    rating: 'Not tasted',
     tastingNotes: '',
     flavorDescriptors: [],
-    roastDegree: 'City',
+    roastDegree: '',
   });
   const [uploadedArtisanLog, setUploadedArtisanLog] = useState<ParsedArtisanLog | null>(null);
   const [isLoadingDriveFiles, setIsLoadingDriveFiles] = useState(false);
@@ -204,19 +206,32 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
     return Number((((green - roasted) / green) * 100).toFixed(1));
   };
 
-  // Open Create Modal
+  // Ensure modal scroll container always starts at the very top when opened
+  useEffect(() => {
+    if (isModalOpen) {
+      requestAnimationFrame(() => {
+        if (modalBodyRef.current) {
+          modalBodyRef.current.scrollTop = 0;
+        }
+      });
+    }
+  }, [isModalOpen]);
+
+  // Open Create Modal - no prepopulated fields except default rating 'Not tasted'
   const handleOpenCreateModal = () => {
     setEditingLogId(null);
     setFormData({
-      date: new Date().toISOString().slice(0, 16),
-      roasterId: settings.roasters[0]?.id || '',
-      beanId: settings.greenBeans[0]?.id || '',
-      greenWeightGrams: 400,
-      roastedWeightGrams: 345,
-      rating: 'Excellent',
+      date: '',
+      roasterId: '',
+      beanId: '',
+      greenWeightGrams: undefined,
+      roastedWeightGrams: undefined,
+      rating: 'Not tasted',
       tastingNotes: '',
       flavorDescriptors: [],
-      roastDegree: 'City',
+      roastDegree: '',
+      artisanLogDriveFileId: undefined,
+      artisanLogDriveFileName: undefined,
     });
     setUploadedArtisanLog(null);
     setIsModalOpen(true);
@@ -233,10 +248,10 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
       beanId: log.beanId,
       greenWeightGrams: log.greenWeightGrams,
       roastedWeightGrams: log.roastedWeightGrams,
-      rating: log.rating,
+      rating: log.rating || 'Not tasted',
       tastingNotes: log.tastingNotes,
       flavorDescriptors: log.flavorDescriptors || [],
-      roastDegree: log.roastDegree || 'City',
+      roastDegree: log.roastDegree || '',
       artisanLogDriveFileId: log.artisanLogDriveFileId,
       artisanLogDriveFileName: log.artisanLogDriveFileName,
     });
@@ -334,7 +349,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
     }
   };
 
-  // Handle local file upload (.alog, .json, .csv)
+  // Handle local file upload (.alog, .json, .csv) - do not prepopulate other form fields
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -346,16 +361,13 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
       setFormData(prev => ({
         ...prev,
         artisanLogDriveFileName: file.name,
-        ...(parsed.roastDate && !editingLogId ? { date: parsed.roastDate } : {}),
-        ...(parsed.greenWeightGrams && !editingLogId ? { greenWeightGrams: parsed.greenWeightGrams } : {}),
-        ...(parsed.roastedWeightGrams && !editingLogId ? { roastedWeightGrams: parsed.roastedWeightGrams } : {}),
       }));
     } catch (err: any) {
       alert(`Could not parse Artisan log file: ${err.message}`);
     }
   };
 
-  // Handle select from Google Drive
+  // Handle select from Google Drive - do not prepopulate other form fields
   const handleSelectDriveFile = async (fileId: string, fileName: string) => {
     try {
       setIsLoadingDriveFiles(true);
@@ -366,9 +378,6 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
         ...prev,
         artisanLogDriveFileId: fileId,
         artisanLogDriveFileName: fileName,
-        ...(parsed.roastDate && !editingLogId ? { date: parsed.roastDate } : {}),
-        ...(parsed.greenWeightGrams && !editingLogId ? { greenWeightGrams: parsed.greenWeightGrams } : {}),
-        ...(parsed.roastedWeightGrams && !editingLogId ? { roastedWeightGrams: parsed.roastedWeightGrams } : {}),
       }));
     } catch (err: any) {
       alert(`Failed to load Artisan file from Drive: ${err.message}`);
@@ -391,16 +400,16 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
 
     const logToSave: RoastLog = {
       id: editingLogId || `roast-${Date.now()}`,
-      date: formData.date || new Date().toISOString(),
+      date: formData.date || '',
       roasterId: formData.roasterId,
       beanId: formData.beanId,
-      greenWeightGrams: formData.greenWeightGrams || 250,
+      greenWeightGrams: formData.greenWeightGrams,
       roastedWeightGrams: formData.roastedWeightGrams,
       weightLossPercent: weightLoss,
-      rating: formData.rating || 'Good',
+      rating: formData.rating || 'Not tasted',
       tastingNotes: formData.tastingNotes?.trim() || '',
       flavorDescriptors: formData.flavorDescriptors || [],
-      roastDegree: formData.roastDegree || 'City',
+      roastDegree: formData.roastDegree || '',
       artisanLogDriveFileId: formData.artisanLogDriveFileId,
       artisanLogDriveFileName: formData.artisanLogDriveFileName || uploadedArtisanLog?.fileName,
       artisanLogParsed: uploadedArtisanLog || undefined,
@@ -463,7 +472,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
             {/* Rating Filter Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
               <span className="text-stone-500 text-xs px-1">Filter:</span>
-              {['ALL', 'Excellent', 'Very good', 'Good', 'OK', 'Bad'].map((rating) => (
+              {['ALL', 'Not tasted', 'Excellent', 'Very good', 'Good', 'OK', 'Bad'].map((rating) => (
                 <button
                   key={rating}
                   onClick={() => setFilterRating(rating)}
@@ -493,7 +502,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
               filteredLogs.map((log) => {
                 const bean = getBean(log.beanId);
                 const isSelected = selectedLog?.id === log.id;
-                const ratingStyle = RATING_COLORS[log.rating] || RATING_COLORS.Good;
+                const ratingStyle = RATING_COLORS[log.rating] || RATING_COLORS['Not tasted'];
 
                 return (
                   <div
@@ -515,11 +524,13 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                           </span>
                           <span className="text-xs font-mono text-stone-400 flex items-center gap-1">
                             <Calendar className="w-3 h-3 text-stone-500" />
-                            {new Date(log.date).toLocaleDateString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                            })}
+                            {log.date
+                              ? new Date(log.date).toLocaleDateString(undefined, {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                })
+                              : 'No Date'}
                           </span>
                         </div>
                         <h3 className="font-semibold text-sm text-roast-text mt-1.5">
@@ -614,18 +625,20 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                     <div className="flex items-center gap-2">
                       <span
                         className={`text-xs font-bold uppercase tracking-wider px-2.5 py-0.5 rounded border ${
-                          RATING_COLORS[selectedLog.rating]?.bg || ''
-                        } ${RATING_COLORS[selectedLog.rating]?.text || ''} ${
-                          RATING_COLORS[selectedLog.rating]?.border || ''
+                          (RATING_COLORS[selectedLog.rating] || RATING_COLORS['Not tasted']).bg
+                        } ${(RATING_COLORS[selectedLog.rating] || RATING_COLORS['Not tasted']).text} ${
+                          (RATING_COLORS[selectedLog.rating] || RATING_COLORS['Not tasted']).border
                         }`}
                       >
                         {selectedLog.rating}
                       </span>
                       <span className="text-xs font-mono text-stone-400">
-                        {new Date(selectedLog.date).toLocaleString(undefined, {
-                          dateStyle: 'medium',
-                          timeStyle: 'short',
-                        })}
+                        {selectedLog.date
+                          ? new Date(selectedLog.date).toLocaleString(undefined, {
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            })
+                          : 'No Date'}
                       </span>
                     </div>
 
@@ -671,14 +684,14 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                   <div className="bg-stone-900/80 p-2.5 rounded-lg border border-stone-800">
                     <span className="text-stone-500 block text-[11px]">Green Weight</span>
                     <span className="font-mono font-semibold text-stone-200 mt-0.5 block">
-                      {selectedLog.greenWeightGrams}g
+                      {selectedLog.greenWeightGrams !== undefined ? `${selectedLog.greenWeightGrams}g` : 'N/A'}
                     </span>
                   </div>
 
                   <div className="bg-stone-900/80 p-2.5 rounded-lg border border-stone-800">
                     <span className="text-stone-500 block text-[11px]">Roasted Weight</span>
                     <span className="font-mono font-semibold text-stone-200 mt-0.5 block">
-                      {selectedLog.roastedWeightGrams ? `${selectedLog.roastedWeightGrams}g` : 'N/A'}
+                      {selectedLog.roastedWeightGrams !== undefined ? `${selectedLog.roastedWeightGrams}g` : 'N/A'}
                     </span>
                   </div>
 
@@ -692,7 +705,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                   <div className="bg-stone-900/80 p-2.5 rounded-lg border border-stone-800">
                     <span className="text-stone-500 block text-[11px]">Roast Degree</span>
                     <span className="font-mono font-semibold text-stone-200 mt-0.5 block">
-                      {selectedLog.roastDegree || 'City'}
+                      {selectedLog.roastDegree || 'N/A'}
                     </span>
                   </div>
                 </div>
@@ -816,9 +829,10 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
 
       {/* Modal: Create / Edit Roast Log */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col sm:items-center sm:justify-center p-0 sm:p-4 overflow-y-auto">
-          <div className="bg-roast-surface border border-roast-border sm:rounded-2xl rounded-none p-4 sm:p-6 max-w-2xl w-full shadow-2xl space-y-4 min-h-screen sm:min-h-0 sm:my-8 flex flex-col">
-            <div className="sticky top-0 z-10 bg-roast-surface/95 backdrop-blur-md pt-2 pb-3 border-b border-roast-border flex items-center justify-between">
+        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] overflow-hidden">
+          <div className="bg-roast-surface border border-roast-border rounded-2xl w-full max-w-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] shadow-2xl flex flex-col overflow-hidden my-0 sm:mt-4">
+            {/* Fixed Modal Header */}
+            <div className="flex-shrink-0 bg-roast-surface px-4 py-3 border-b border-roast-border flex items-center justify-between">
               <h3 className="text-base sm:text-lg font-bold text-roast-text flex items-center gap-2">
                 <Flame className="w-5 h-5 text-amber-500" />
                 {editingLogId ? 'Edit Roast Log' : 'Create New Roast Log'}
@@ -840,11 +854,15 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
               </div>
             </div>
 
-            <div className="space-y-4 text-xs flex-1">
+            {/* Scrollable Modal Body */}
+            <div
+              ref={modalBodyRef}
+              className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-4 text-xs"
+            >
               {/* Row 1: Date, Roaster, Bean */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-stone-300 font-semibold mb-1">Date & Time *</label>
+                  <label className="block text-stone-300 font-semibold mb-1">Date & Time</label>
                   <input
                     type="datetime-local"
                     value={formData.date || ''}
@@ -856,10 +874,11 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                 <div>
                   <label className="block text-stone-300 font-semibold mb-1">Roaster Used *</label>
                   <select
-                    value={formData.roasterId}
+                    value={formData.roasterId || ''}
                     onChange={(e) => setFormData({ ...formData, roasterId: e.target.value })}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   >
+                    <option value="">-- Select Roaster --</option>
                     {settings.roasters.map((r) => (
                       <option key={r.id} value={r.id}>
                         {r.name}
@@ -871,10 +890,11 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                 <div>
                   <label className="block text-stone-300 font-semibold mb-1">Green Beans *</label>
                   <select
-                    value={formData.beanId}
+                    value={formData.beanId || ''}
                     onChange={(e) => setFormData({ ...formData, beanId: e.target.value })}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   >
+                    <option value="">-- Select Green Bean --</option>
                     {settings.greenBeans.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name} ({b.origin})
@@ -887,11 +907,11 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
               {/* Row 2: Weights & Degree */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-stone-300 font-semibold mb-1">Green Weight (g) *</label>
+                  <label className="block text-stone-300 font-semibold mb-1">Green Weight (g)</label>
                   <input
                     type="number"
                     step="any"
-                    placeholder="250"
+                    placeholder="Enter weight in g"
                     value={formData.greenWeightGrams !== undefined && formData.greenWeightGrams !== null ? formData.greenWeightGrams : ''}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -909,7 +929,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                   <input
                     type="number"
                     step="any"
-                    placeholder="215"
+                    placeholder="Enter weight in g"
                     value={formData.roastedWeightGrams !== undefined && formData.roastedWeightGrams !== null ? formData.roastedWeightGrams : ''}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -925,10 +945,11 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                 <div>
                   <label className="block text-stone-300 font-semibold mb-1">Roast Degree</label>
                   <select
-                    value={formData.roastDegree}
+                    value={formData.roastDegree || ''}
                     onChange={(e) => setFormData({ ...formData, roastDegree: e.target.value as any })}
                     className="w-full bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 text-roast-text focus:border-amber-500 focus:outline-none"
                   >
+                    <option value="">-- Select Roast Degree --</option>
                     <option value="Light">Light / Cinnamon</option>
                     <option value="City">City (Light-Medium Filter)</option>
                     <option value="City+">City+ (Medium)</option>
@@ -943,8 +964,8 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                 <label className="block text-stone-300 font-semibold mb-1.5">
                   Roast Classification Rating *
                 </label>
-                <div className="grid grid-cols-5 gap-2">
-                  {(['Excellent', 'Very good', 'Good', 'OK', 'Bad'] as RoastRating[]).map((r) => {
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {(['Not tasted', 'Excellent', 'Very good', 'Good', 'OK', 'Bad'] as RoastRating[]).map((r) => {
                     const isSelected = formData.rating === r;
                     const style = RATING_COLORS[r];
                     return (
@@ -952,7 +973,7 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
                         key={r}
                         type="button"
                         onClick={() => setFormData({ ...formData, rating: r })}
-                        className={`py-2 px-1 rounded-lg text-xs font-bold transition text-center border ${
+                        className={`py-2 px-2 rounded-lg text-xs font-bold transition text-center border ${
                           isSelected
                             ? `${style.bg} ${style.text} ${style.border} ring-2 ring-amber-500/50`
                             : 'bg-stone-900 text-stone-400 border-stone-800 hover:text-stone-200'
@@ -1241,8 +1262,8 @@ export const RoastLogPage: React.FC<RoastLogPageProps> = ({
               </div>
             </div>
 
-            {/* Modal Actions */}
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-roast-border">
+            {/* Fixed Modal Footer Actions */}
+            <div className="flex-shrink-0 bg-roast-surface px-4 py-3 border-t border-roast-border flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
